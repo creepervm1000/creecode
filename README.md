@@ -29,7 +29,7 @@ Supported providers:
 - Node.js 20 or newer
 - An API key for your chosen provider, unless you use Ollama locally
 
-This repository currently includes `node_modules/`, so you can run it immediately in this workspace. If you want a fresh install elsewhere, make sure the same dependencies are available before running it.
+Install dependencies before running CreeCode from source in a fresh checkout.
 
 ## Quick Start
 
@@ -156,14 +156,4 @@ bin/        CLI entry point
 src/        Core app, providers, tools, web UI, config, trust system
 scripts/    Build tooling
 dist/       Bundled output
-```
-
-## Pushing This Repo
-
-After making documentation or code changes:
-
-```bash
-git add .
-git commit -m "Add README"
-git push -u origin main
 ```

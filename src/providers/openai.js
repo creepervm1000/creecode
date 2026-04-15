@@ -11,15 +11,30 @@ export class OpenAIProvider extends BaseProvider {
     this.model = config.model || 'gpt-4o';
   }
 
+  buildHeaders() {
+    const headers = {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${this.apiKey}`,
+    };
+
+    if (this.isOpenRouter()) {
+      headers['HTTP-Referer'] = 'https://git.creepernet.qzz.io/creeper/creecode';
+      headers['X-OpenRouter-Title'] = 'CreeCode';
+      headers['X-Title'] = 'CreeCode';
+      headers['X-OpenRouter-Categories'] = 'cli-agent';
+    }
+
+    return headers;
+  }
+
+  isOpenRouter() {
+    return this.baseUrl.includes('openrouter.ai');
+  }
+
   async chat(messages) {
     const res = await this.request(`${this.baseUrl}/chat/completions`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${this.apiKey}`,
-        'HTTP-Referer': 'https://git.creepernet.qzz.io/creeper/creecode',
-        'X-Title': 'CreeCode',
-      },
+      headers: this.buildHeaders(),
       body: JSON.stringify({
         model: this.model,
         messages,
@@ -33,12 +48,7 @@ export class OpenAIProvider extends BaseProvider {
   async streamChat(messages, onChunk) {
     const res = await this.fetchFn(`${this.baseUrl}/chat/completions`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${this.apiKey}`,
-        'HTTP-Referer': 'https://git.creepernet.qzz.io/creeper/creecode',
-        'X-Title': 'CreeCode',
-      },
+      headers: this.buildHeaders(),
       body: JSON.stringify({
         model: this.model,
         messages,
