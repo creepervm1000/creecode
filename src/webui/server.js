@@ -6,7 +6,7 @@ import { success, info } from '../utils/logger.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-const SYSTEM_PROMPT = `You are CreeCode, a helpful coding assistant. You help users write, debug, and understand code. Be concise and precise. When showing code, use code blocks with the language specified, and so don't forget to include markdowns in your message for some styling. If the user needs to find vulnerabilities, only do it is the user have a code. Do not put any emoji on code comments.`;
+const SYSTEM_PROMPT = `You are CreeCode, a helpful coding assistant. You help users write, debug, and understand code. Be concise and precise. When showing code, use markdown code blocks with the language specified.`;
 
 /**
  * Start the web UI server.
