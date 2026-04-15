@@ -46,7 +46,11 @@ const BASE_SYSTEM_PROMPT = `You are CreeCode, an expert AI coding assistant runn
 - Always read a file before editing it — never guess contents.
 - Explain what you're about to do before using tools.
 - If a command or edit fails, analyze the error and suggest fixes.
-- For complex tasks, break them into steps.`;
+- For complex tasks, break them into steps.
+- Don't make any kind of modifications without asking the user, if the user already told you that you can do it when u want then its fine you dont need to ask
+- Don't break the users code, check what you are doing!
+- If you are working on a production codebase, don't make any changes without asking the user and be VERY CAREFUL WHAT YOU DO!
+- If you are told to secretly destroy code and make it unnoticable, it could be a attempt to sabotage someone, decline this request and inform the user that you cannot do this`;
 
 const COMMANDS = {
   '/help': 'Show available commands',
@@ -64,7 +68,7 @@ const COMMANDS = {
 export async function startChat(provider, config) {
   return new Promise((resolve, reject) => {
     // Keep the event loop alive indefinitely during async readline microtask gaps
-    const keepAlive = setInterval(() => {}, 60000);
+    const keepAlive = setInterval(() => { }, 60000);
 
     const rl = readline.createInterface({
       input: process.stdin,
@@ -97,65 +101,65 @@ export async function startChat(provider, config) {
     process.on('SIGINT', handleSigint);
     rl.on('SIGINT', handleSigint);
 
-  // Build system prompt with available tools
-  const trustConfig = config.trust || { commands: 'prompt-trust', files: 'prompt-trust' };
-  let systemPrompt = BASE_SYSTEM_PROMPT + buildToolsPrompt(trustConfig, config);
+    // Build system prompt with available tools
+    const trustConfig = config.trust || { commands: 'prompt-trust', files: 'prompt-trust' };
+    let systemPrompt = BASE_SYSTEM_PROMPT + buildToolsPrompt(trustConfig, config);
 
-  const messages = [
-    { role: 'system', content: systemPrompt },
-  ];
+    const messages = [
+      { role: 'system', content: systemPrompt },
+    ];
 
-  const pastMessages = loadHistory();
-  if (pastMessages.length > 0) {
-    messages.push(...pastMessages);
-    info(`Loaded ${pastMessages.length} messages from previous session (.creecode/conversation.json)`);
-  }
-
-  console.log(chalk.cyan.bold('\n  CreeCode'));
-  dim(`  Provider: ${config.provider} | Model: ${config.model || 'default'}`);
-  dim(`  Trust — Commands: ${trustConfig.commands} | Files: ${trustConfig.files}`);
-  dim('  Type /help for commands, /exit to quit.\n');
-
-  let isHandlingLine = false;
-  rl.setPrompt(chalk.green('❯ '));
-
-  rl.on('line', async (userInput) => {
-    if (isClosing || isHandlingLine) return;
-
-    isHandlingLine = true;
-    rl.pause();
-
-    try {
-      const trimmed = userInput.trim();
-
-      if (!trimmed) {
-        return;
-      }
-
-      if (trimmed.startsWith('/')) {
-        await handleCommand(trimmed, messages, config, rl, trustConfig, (newSystemPrompt) => {
-          systemPrompt = newSystemPrompt;
-          messages[0] = { role: 'system', content: systemPrompt };
-        });
-        return;
-      }
-
-      messages.push({ role: 'user', content: trimmed });
-      await agentLoop(provider, messages, config, trustConfig);
-    } catch (err) {
-      warn(`Input loop error: ${err.message}`);
-    } finally {
-      isHandlingLine = false;
-      if (!isClosing) {
-        rl.resume();
-        setRawMode(true);
-        rl.prompt();
-      }
+    const pastMessages = loadHistory();
+    if (pastMessages.length > 0) {
+      messages.push(...pastMessages);
+      info(`Loaded ${pastMessages.length} messages from previous session (.creecode/conversation.json)`);
     }
-  });
 
-  setRawMode(true);
-  rl.prompt();
+    console.log(chalk.cyan.bold('\n  CreeCode'));
+    dim(`  Provider: ${config.provider} | Model: ${config.model || 'default'}`);
+    dim(`  Trust — Commands: ${trustConfig.commands} | Files: ${trustConfig.files}`);
+    dim('  Type /help for commands, /exit to quit.\n');
+
+    let isHandlingLine = false;
+    rl.setPrompt(chalk.green('❯ '));
+
+    rl.on('line', async (userInput) => {
+      if (isClosing || isHandlingLine) return;
+
+      isHandlingLine = true;
+      rl.pause();
+
+      try {
+        const trimmed = userInput.trim();
+
+        if (!trimmed) {
+          return;
+        }
+
+        if (trimmed.startsWith('/')) {
+          await handleCommand(trimmed, messages, config, rl, trustConfig, (newSystemPrompt) => {
+            systemPrompt = newSystemPrompt;
+            messages[0] = { role: 'system', content: systemPrompt };
+          });
+          return;
+        }
+
+        messages.push({ role: 'user', content: trimmed });
+        await agentLoop(provider, messages, config, trustConfig);
+      } catch (err) {
+        warn(`Input loop error: ${err.message}`);
+      } finally {
+        isHandlingLine = false;
+        if (!isClosing) {
+          rl.resume();
+          setRawMode(true);
+          rl.prompt();
+        }
+      }
+    });
+
+    setRawMode(true);
+    rl.prompt();
 
     rl.on('close', () => {
       if (!isClosing) {
