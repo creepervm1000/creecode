@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <meta name="description" content="CreeCode — AI Coding Assistant Web Interface"/>
+  <title>CreeCode — Chat</title>
+  <link rel="stylesheet" href="style.css"/>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"/>
+</head>
+<body>
+  <div class="app">
+    <header id="app-header">
+      <div class="header-left">
+        <h1>CreeCode</h1>
+        <span class="badge" id="provider-badge">loading...</span>
+      </div>
+      <div class="header-right">
+        <button id="clear-btn" title="Clear conversation">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+        </button>
+      </div>
+    </header>
+
+    <main id="chat-messages">
+      <div class="message assistant">
+        <div class="message-avatar">CC</div>
+        <div class="message-content">
+          <p>Hey! I'm <strong>CreeCode</strong>, your coding assistant. Ask me anything about code — I can help write, debug, explain, or review.</p>
+        </div>
+      </div>
+    </main>
+
+    <footer id="chat-input-area">
+      <form id="chat-form">
+        <div class="input-wrapper">
+          <textarea id="chat-input" placeholder="Ask CreeCode anything..." rows="1" autofocus></textarea>
+          <button type="submit" id="send-btn" title="Send message">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+          </button>
+        </div>
+      </form>
+    </footer>
+  </div>
+
+  <script>
+    const chatMessages = document.getElementById('chat-messages');
+    const chatForm = document.getElementById('chat-form');
+    const chatInput = document.getElementById('chat-input');
+    const clearBtn = document.getElementById('clear-btn');
+    const providerBadge = document.getElementById('provider-badge');
+
+    // Load config
+    fetch('/api/config')
+      .then(r => r.json())
+      .then(c => {
+        providerBadge.textContent = `${c.provider} / ${c.model}`;
+      })
+      .catch(() => {
+        providerBadge.textContent = 'unknown';
+      });
+
+    // Auto-resize textarea
+    chatInput.addEventListener('input', () => {
+      chatInput.style.height = 'auto';
+      chatInput.style.height = Math.min(chatInput.scrollHeight, 200) + 'px';
+    });
+
+    // Enter to send, Shift+Enter for newline
+    chatInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        chatForm.dispatchEvent(new Event('submit'));
+      }
+    });
+
+    // Clear
+    clearBtn.addEventListener('click', async () => {
+      await fetch('/api/clear', { method: 'POST' });
+      chatMessages.innerHTML = `
+        <div class="message assistant">
+          <div class="message-avatar">CC</div>
+          <div class="message-content">
+            <p>Conversation cleared. How can I help you?</p>
+          </div>
+        </div>`;
+    });
+
+    // Send message
+    chatForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const message = chatInput.value.trim();
+      if (!message) return;
+
+      // Add user message
+      appendMessage('user', message);
+      chatInput.value = '';
+      chatInput.style.height = 'auto';
+
+      // Create assistant message placeholder
+      const assistantMsg = appendMessage('assistant', '');
+      const contentEl = assistantMsg.querySelector('.message-content');
+
+      try {
+        const res = await fetch('/api/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message }),
+        });
+
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let fullText = '';
+        let buffer = '';
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || '';
+
+          for (const line of lines) {
+            if (!line.startsWith('data:')) continue;
+            const payload = line.slice(5).trim();
+            try {
+              const data = JSON.parse(payload);
+              if (data.error) {
+                contentEl.innerHTML = `<p class="error">Error: ${escapeHtml(data.error)}</p>`;
+                return;
+              }
+              if (data.done) continue;
+              if (data.chunk) {
+                fullText += data.chunk;
+                contentEl.innerHTML = renderMarkdown(fullText);
+                chatMessages.scrollTop = chatMessages.scrollHeight;
+              }
+            } catch {}
+          }
+        }
+      } catch (err) {
+        contentEl.innerHTML = `<p class="error">Connection error: ${escapeHtml(err.message)}</p>`;
+      }
+    });
+
+    function appendMessage(role, content) {
+      const div = document.createElement('div');
+      div.className = `message ${role}`;
+      div.innerHTML = `
+        <div class="message-avatar">${role === 'user' ? 'You' : 'CC'}</div>
+        <div class="message-content">${content ? renderMarkdown(content) : '<span class="typing">Thinking...</span>'}</div>
+      `;
+      chatMessages.appendChild(div);
+      chatMessages.scrollTop = chatMessages.scrollHeight;
+      return div;
+    }
+
+    function escapeHtml(s) {
+      return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    }
+
+    function renderMarkdown(text) {
+      // Minimal markdown rendering
+      let html = escapeHtml(text);
+      // Code blocks
+      html = html.replace(/```(\w*)\n([\s\S]*?)```/g, '<pre><code class="lang-$1">$2</code></pre>');
+      // Inline code
+      html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+      // Bold
+      html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+      // Italic
+      html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
+      // Line breaks
+      html = html.replace(/\n/g, '<br/>');
+      return html;
+    }
+  </script>
+</body>
+</html>
