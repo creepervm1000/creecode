@@ -17,10 +17,8 @@ export class OpenAIProvider extends BaseProvider {
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${this.apiKey}`,
-        ...(this.baseUrl.includes('openrouter.ai') && {
-          'HTTP-Referer': 'https://git.creepernet.qzz.io/creeper/creecode',
-          'X-Title': 'CreeCode',
-        }),
+        'HTTP-Referer': 'https://git.creepernet.qzz.io/creeper/creecode',
+        'X-Title': 'CreeCode',
       },
       body: JSON.stringify({
         model: this.model,
@@ -38,10 +36,8 @@ export class OpenAIProvider extends BaseProvider {
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${this.apiKey}`,
-        ...(this.baseUrl.includes('openrouter.ai') && {
-          'HTTP-Referer': 'https://git.creepernet.qzz.io/creeper/creecode',
-          'X-Title': 'CreeCode',
-        }),
+        'HTTP-Referer': 'https://git.creepernet.qzz.io/creeper/creecode',
+        'X-Title': 'CreeCode',
       },
       body: JSON.stringify({
         model: this.model,
