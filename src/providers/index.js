@@ -50,6 +50,13 @@ export const PROVIDERS = {
     defaultModel: 'openai/gpt-4o',
     needsKey: true,
   },
+  kilo: {
+    name: 'Kilo (z.ai)',
+    class: OpenAIProvider,
+    baseUrl: 'https://api.kilotonlabs.com/v1',
+    defaultModel: 'glm-4-flash',
+    needsKey: true,
+  },
   ollama: {
     name: 'Ollama (Local)',
     class: OllamaProvider,
