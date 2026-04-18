@@ -54,7 +54,7 @@ export const PROVIDERS = {
     name: 'Kilo Gateway',
     class: OpenAIProvider,
     baseUrl: 'https://api.kilo.ai/api/gateway',
-    defaultModel: 'glm-4-flash',
+    defaultModel: 'kilo-auto/free',
     needsKey: true,
   },
   ollama: {
