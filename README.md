@@ -10,7 +10,7 @@ Supported providers:
 - Grok
 - Groq
 - OpenRouter
-- Kilo (z.ai)
+- Kilo Gateway
 - Ollama
 - HuggingFace
 - Custom OpenAI-compatible APIs
