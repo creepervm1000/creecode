@@ -50,6 +50,13 @@ export const PROVIDERS = {
     defaultModel: 'openai/gpt-4o',
     needsKey: true,
   },
+  kilo: {
+    name: 'Kilo Gateway',
+    class: OpenAIProvider,
+    baseUrl: 'https://api.kilo.ai/api/gateway',
+    defaultModel: 'kilo-auto/free',
+    needsKey: true,
+  },
   ollama: {
     name: 'Ollama (Local)',
     class: OllamaProvider,
