@@ -53,7 +53,7 @@ export const PROVIDERS = {
   kilo: {
     name: 'Kilo Gateway',
     class: OpenAIProvider,
-    baseUrl: 'https://api.kilotonlabs.com/v1',
+    baseUrl: 'https://api.kilo.ai/api/gateway',
     defaultModel: 'glm-4-flash',
     needsKey: true,
   },
