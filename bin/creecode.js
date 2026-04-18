@@ -1,14 +1,18 @@
 #!/usr/bin/env node
 
 import { Command } from 'commander';
+import { createRequire } from 'module';
 import { run } from '../src/index.js';
+
+const require = createRequire(import.meta.url);
+const { version } = require('../package.json');
 
 const program = new Command();
 
 program
   .name('creecode')
   .description('CLI coding assistant — supports 10+ LLM providers')
-  .version('1.0.0')
+  .version(version)
   .option('--setup', 'Run the setup wizard')
   .option('--provider <provider>', 'LLM provider (openai, anthropic, gemini, grok, groq, openrouter, ollama, huggingface, custom-openai, custom-anthropic)')
   .option('--model <model>', 'Model name/ID to use')

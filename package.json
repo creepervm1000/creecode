@@ -1,0 +1,13 @@
+{
+  "name": "creecode",
+  "version": "1.0.0",
+  "description": "CLI coding assistant — supports 10+ LLM providers",
+  "type": "module",
+  "bin": {
+    "creecode": "./bin/creecode.js"
+  },
+  "scripts": {
+    "start": "node bin/creecode.js",
+    "bundle": "node scripts/bundle.js"
+  }
+}
