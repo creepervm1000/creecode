@@ -13,13 +13,29 @@ import { setRawMode } from './utils/terminal.js';
 const HISTORY_DIR = join(process.cwd(), '.creecode');
 const HISTORY_FILE = join(HISTORY_DIR, 'conversation.json');
 
+const MAX_HISTORY_MESSAGES = 200;
+
 function saveHistory(messages) {
   try {
     if (!existsSync(HISTORY_DIR)) {
       mkdirSync(HISTORY_DIR, { recursive: true });
     }
     // Don't save the system prompt (it can be large and changes often)
-    const historyToSave = messages.filter(m => m.role !== 'system');
+    let historyToSave = messages.filter(m => m.role !== 'system');
+    // Cap history so the file doesn't grow unbounded across long sessions
+    if (historyToSave.length > MAX_HISTORY_MESSAGES) {
+      historyToSave = historyToSave.slice(-MAX_HISTORY_MESSAGES);
+      // Don't start a loaded session with a tool-result user message
+      // with no preceding assistant tool_calls; drop leading orphans.
+      while (
+        historyToSave.length > 0 &&
+        historyToSave[0].role === 'user' &&
+        typeof historyToSave[0].content === 'string' &&
+        historyToSave[0].content.startsWith('<tool_result')
+      ) {
+        historyToSave.shift();
+      }
+    }
     writeFileSync(HISTORY_FILE, JSON.stringify(historyToSave, null, 2), 'utf-8');
   } catch (err) {
     // silently fail saves
@@ -179,6 +195,10 @@ export async function startChat(provider, config) {
 async function agentLoop(provider, messages, config, trustConfig) {
   const MAX_ITERATIONS = 20;
   let iteration = 0;
+  // Remember length before the agent starts adding turns so we can cleanly
+  // rewind on error instead of blindly popping the last message (which on
+  // iter >= 2 is a tool-result user message, not the user's original input).
+  const baselineLen = messages.length;
 
   while (iteration < MAX_ITERATIONS) {
     iteration++;
@@ -206,13 +226,37 @@ async function agentLoop(provider, messages, config, trustConfig) {
     } catch (err) {
       spinner.stop();
       warn(`Error: ${err.message}\n`);
-      messages.pop(); // Remove the failed message
+      // Rewind everything added since the user's input so the conversation
+      // isn't left with an unanswered tool-result or half-finished turn.
+      // On iteration 1 this drops the user's failed input (old behavior).
+      // On iteration >= 2 this drops the last tool-result user message plus
+      // any prior assistant/tool-result pairs from this turn — callers can
+      // retry with the original user prompt intact earlier in history.
+      if (messages.length > baselineLen) {
+        messages.length = baselineLen;
+      } else {
+        messages.pop();
+      }
+      saveHistory(messages);
       return;
     }
 
     // Parse tool calls from the response
-    const { text, toolCalls } = parseToolCalls(fullResponse);
+    const { text, toolCalls, hallucinatedToolResult } = parseToolCalls(fullResponse);
     messages.push({ role: 'assistant', content: fullResponse });
+
+    // Model invented a <tool_result> block without actually emitting a tool
+    // call — common failure mode on smaller models (gpt-oss:20b etc.). Inject
+    // a correction as the next user turn and loop, instead of silently
+    // accepting the fake result.
+    if (hallucinatedToolResult && toolCalls.length === 0) {
+      warn('Model hallucinated a <tool_result> block. Injecting correction.\n');
+      messages.push({
+        role: 'user',
+        content: 'You wrote a <tool_result> block yourself. That tag is produced ONLY by the runtime, after you emit a <tool_call> and the runtime actually runs the tool. No tool was actually run. If you want to use a tool, emit <tool_call>...</tool_call> and STOP — wait for the real <tool_result> in the next message.',
+      });
+      continue;
+    }
 
     // No tool calls — we're done
     if (toolCalls.length === 0) {
@@ -248,6 +292,17 @@ async function agentLoop(provider, messages, config, trustConfig) {
   }
 
   warn('Agent reached maximum iterations. Stopping.');
+  // The last assistant message very likely contains unexecuted tool_calls.
+  // Append a synthetic tool-result-style notice so history stays coherent
+  // (assistant-with-tools -> user-tool-result) and the next session can
+  // continue without the model re-issuing the same pending calls.
+  const last = messages[messages.length - 1];
+  if (last && last.role === 'assistant') {
+    messages.push({
+      role: 'user',
+      content: '<tool_result name="__system__">\n{"interrupted": "agent reached maximum iterations (' + MAX_ITERATIONS + ') — tool calls above were not executed"}\n</tool_result>',
+    });
+  }
   saveHistory(messages);
 }
 
