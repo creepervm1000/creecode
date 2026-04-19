@@ -5,28 +5,67 @@ import { homedir } from 'node:os';
 const CONFIG_DIR = join(homedir(), '.creecode');
 const CONFIG_PATH = join(CONFIG_DIR, 'config.json');
 
-export function getConfigDir() {
-  return CONFIG_DIR;
-}
+export const DEFAULT_CONFIG = {
+  provider: null,
+  model: null,
+  baseUrl: null,
+  proxy: null,
+  allowOutsideWorkspace: false,
 
-export function getConfigPath() {
-  return CONFIG_PATH;
-}
+  temperature: 0.2,
+  maxTokens: 4096,
+  topP: 1,
+  systemPromptAppendix: '',
 
-export function configExists() {
-  return existsSync(CONFIG_PATH);
-}
+  maxIterations: 25,
+  historyMaxMessages: 200,
+  autoCompactHistory: true,
+
+  commandTimeoutMs: 30000,
+  commandMaxOutputBytes: 10000,
+  networkTimeoutMs: 30000,
+  networkMaxBytes: 200000,
+  networkAllowHosts: [],
+  networkDenyHosts: ['169.254.169.254', 'metadata.google.internal'],
+
+  disabledTools: [],
+  enabledTools: null,
+
+  trust: {
+    files: 'agent-decides-trust',
+    commands: 'prompt-trust',
+    network: 'prompt-trust',
+    git: 'prompt-trust',
+    process: 'prompt-trust',
+    notes: 'full-trust',
+    meta: 'full-trust',
+  },
+
+  theme: 'dark',
+  logLevel: 'info',
+  telemetry: false,
+
+  editor: process.env.EDITOR || 'nano',
+  webui: false,
+  webuiPort: 3000,
+  webuiHost: '127.0.0.1',
+  webuiAuthToken: null,
+
+  notesFile: null,
+  envDenyKeys: ['TOKEN', 'KEY', 'SECRET', 'PASSWORD', 'CREDENTIAL'],
+};
+
+export function getConfigDir() { return CONFIG_DIR; }
+export function getConfigPath() { return CONFIG_PATH; }
+export function configExists() { return existsSync(CONFIG_PATH); }
 
 export function loadConfig() {
-  if (!configExists()) {
-    return {};
-  }
+  if (!configExists()) return { ...DEFAULT_CONFIG };
   try {
     const raw = readFileSync(CONFIG_PATH, 'utf-8');
-    return JSON.parse(raw);
-  } catch {
-    return {};
-  }
+    const parsed = JSON.parse(raw);
+    return { ...DEFAULT_CONFIG, ...parsed, trust: { ...DEFAULT_CONFIG.trust, ...(parsed.trust || {}) } };
+  } catch { return { ...DEFAULT_CONFIG }; }
 }
 
 export function saveConfig(data) {
@@ -35,12 +74,20 @@ export function saveConfig(data) {
 }
 
 export function mergeConfig(saved, cli) {
-  // CLI flags override saved config
   const merged = { ...saved };
   for (const [key, value] of Object.entries(cli)) {
-    if (value !== undefined && value !== null) {
-      merged[key] = value;
-    }
+    if (value !== undefined && value !== null) merged[key] = value;
   }
   return merged;
+}
+
+export function setConfigValue(config, keyPath, value) {
+  const parts = keyPath.split('.');
+  let cur = config;
+  for (let i = 0; i < parts.length - 1; i++) {
+    if (cur[parts[i]] == null || typeof cur[parts[i]] !== 'object') cur[parts[i]] = {};
+    cur = cur[parts[i]];
+  }
+  cur[parts[parts.length - 1]] = value;
+  return config;
 }
