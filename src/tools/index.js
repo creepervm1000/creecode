@@ -75,7 +75,7 @@ export function buildToolsPrompt(trustConfig, config = {}) {
     return '\nYou have no tool access. You can only provide text responses.';
   }
 
-  let prompt = `\n## Available Tools\n\nWorkspace root: ${workspaceRoot}\n${workspaceNote}\n\nYou can use tools by including a tool call block in your response. Use this exact format:\n\n<tool_call>\n{"name": "tool_name", "args": {"param1": "value1"}}\n</tool_call>\n\nYou may include multiple tool calls in one response. Always explain what you're doing before calling a tool.\n\nAvailable tools:\n`;
+  let prompt = `\n## Available Tools\n\nWorkspace root: ${workspaceRoot}\n${workspaceNote}\n\nYou can use tools by including a tool call block in your response. Use this exact format:\n\n<tool_call>\n{"name": "tool_name", "args": {"param1": "value1"}}\n</tool_call>\n\nYou may include multiple tool calls in one response. Always explain what you're doing before calling a tool.\n\n**CRITICAL — DO NOT HALLUCINATE TOOL RESULTS.** Never write a \`<tool_result>...</tool_result>\` block yourself. That tag is produced ONLY by the runtime, AFTER you emit a \`<tool_call>\` and the runtime actually runs the tool. If you want a tool to run, emit \`<tool_call>\` and STOP — wait for the runtime to reply with the real \`<tool_result>\` in the next user message.\n\nAvailable tools:\n`;
 
   for (const tool of availableTools) {
     const params = Object.entries(tool.parameters)
@@ -84,7 +84,7 @@ export function buildToolsPrompt(trustConfig, config = {}) {
     prompt += `\n### ${tool.name}\n${tool.description}\nParameters:\n${params}\n`;
   }
 
-  prompt += `\nIMPORTANT RULES:\n- Always read a file before editing it.\n- Use edit_file for small targeted changes, write_file for creating new files or full rewrites.\n- ${allowOutsideWorkspace(config) ? 'Outside-workspace access is allowed, but only use it when the task clearly requires it.' : 'All file paths and command working directories must stay inside the workspace root.'}\n- Explain your changes to the user.\n- If a command fails, analyze the error and try to fix it.\n- Do NOT hallucinate file contents — always read first.\n`;
+  prompt += `\nIMPORTANT RULES:\n- Always read a file before editing it.\n- Use edit_file for small targeted changes, write_file for creating new files or full rewrites.\n- ${allowOutsideWorkspace(config) ? 'Outside-workspace access is allowed, but only use it when the task clearly requires it.' : 'All file paths and command working directories must stay inside the workspace root.'}\n- Explain your changes to the user.\n- If a command fails, analyze the error and try to fix it.\n- Do NOT hallucinate file contents — always read first.\n- Do NOT write \`<tool_result>\` blocks yourself. Only emit \`<tool_call>\` and wait for the runtime's real response.\n`;
 
   return prompt;
 }
@@ -95,6 +95,7 @@ export function buildToolsPrompt(trustConfig, config = {}) {
  */
 export function parseToolCalls(response) {
   const toolCallRegex = /<tool_call>\s*([\s\S]*?)\s*<\/tool_call>/g;
+  const toolResultRegex = /<tool_result(?:\s[^>]*)?>[\s\S]*?<\/tool_result>/g;
   const toolCalls = [];
   let match;
 
@@ -107,9 +108,18 @@ export function parseToolCalls(response) {
     }
   }
 
-  // Remove tool call blocks from visible text
-  const text = response.replace(toolCallRegex, '').trim();
-  return { text, toolCalls };
+  // Detect hallucinated tool_result blocks — small models (incl. gpt-oss:20b)
+  // sometimes invent their own <tool_result>...</tool_result> pretending the
+  // runtime ran a tool. The runtime is the ONLY valid producer of that tag.
+  const hallucinatedToolResult = toolResultRegex.test(response);
+  toolResultRegex.lastIndex = 0;
+
+  // Remove tool_call AND any hallucinated tool_result blocks from visible text
+  const text = response
+    .replace(toolCallRegex, '')
+    .replace(toolResultRegex, '')
+    .trim();
+  return { text, toolCalls, hallucinatedToolResult };
 }
 
 /**

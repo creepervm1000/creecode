@@ -242,8 +242,21 @@ async function agentLoop(provider, messages, config, trustConfig) {
     }
 
     // Parse tool calls from the response
-    const { text, toolCalls } = parseToolCalls(fullResponse);
+    const { text, toolCalls, hallucinatedToolResult } = parseToolCalls(fullResponse);
     messages.push({ role: 'assistant', content: fullResponse });
+
+    // Model invented a <tool_result> block without actually emitting a tool
+    // call — common failure mode on smaller models (gpt-oss:20b etc.). Inject
+    // a correction as the next user turn and loop, instead of silently
+    // accepting the fake result.
+    if (hallucinatedToolResult && toolCalls.length === 0) {
+      warn('Model hallucinated a <tool_result> block. Injecting correction.\n');
+      messages.push({
+        role: 'user',
+        content: 'You wrote a <tool_result> block yourself. That tag is produced ONLY by the runtime, after you emit a <tool_call> and the runtime actually runs the tool. No tool was actually run. If you want to use a tool, emit <tool_call>...</tool_call> and STOP — wait for the real <tool_result> in the next message.',
+      });
+      continue;
+    }
 
     // No tool calls — we're done
     if (toolCalls.length === 0) {
