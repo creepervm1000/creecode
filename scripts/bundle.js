@@ -73,14 +73,6 @@ async function bundle() {
   content = content.replace(/^(#!\/usr\/bin\/env node\n)+/, '#!/usr/bin/env node\n');
 
 
-  // Dedupe esbuild's auto-injected createRequire import (it can inject its own on top of our banner → SyntaxError)
-  content = content.replace(/^import \{ createRequire[^}]*\} from ["']module["'];?\s*$/gm, '');
-  content = content.replace(/^import \{ createRequire[^}]*\} from ["']node:module["'];?\s*$/gm, (m, i) => i < 200 ? m : '');
-  // Re-ensure our aliased banner import is present exactly once at top (after shebang)
-  if (!content.includes('__ccCreateRequire')) {
-    content = content.replace(/^(#![^\n]*\n)/, '$1import { createRequire as __ccCreateRequire } from "node:module";\nconst require = __ccCreateRequire(import.meta.url);\n');
-  }
-
   // Patch the webui server's static path to be relative to the bundle
   content = content.replace(
     /express\.static\([^)]+\)/g,
