@@ -36,6 +36,13 @@ export const PROVIDERS = {
     defaultModel: 'grok-3',
     needsKey: true,
   },
+  glm: {
+    name: 'GLM (Z.ai)',
+    class: OpenAIProvider,
+    baseUrl: 'https://api.z.ai/api/paas/v4',
+    defaultModel: 'GLM-4.7-Flash',
+    needsKey: true,
+  },
   groq: {
     name: 'Groq',
     class: OpenAIProvider,
