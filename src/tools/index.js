@@ -209,6 +209,10 @@ export async function executeTool(toolCall, trustConfig, config = {}) {
   if (!toolDef) return { error: `Unknown tool: ${toolCall.name}` };
   if (!isToolEnabled(toolDef, config)) return { error: `Tool disabled by config: ${toolDef.name}` };
   const trustLevel = trustConfig[toolDef.category] || 'prompt-trust';
-  const args = toolCall.args || toolCall.arguments || {};
+  const args = toolCall.args
+    || toolCall.arguments
+    || Object.fromEntries(
+      Object.entries(toolCall).filter(([key]) => !['name', 'id', 'type'].includes(key))
+    );
   return await toolDef.handler(args, trustLevel, config);
 }
