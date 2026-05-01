@@ -11,6 +11,72 @@ const TOOL_CALL_MODE_CHOICES = [
   { name: 'Both — allow native tool calling and XML fallback', value: 'both' },
 ];
 
+async function chooseModelFromProvider(provider, providerDef, config) {
+  if (provider === 'ollama') {
+    info('Checking for available Ollama models...');
+    try {
+      const res = await fetch(`${config.baseUrl || 'http://localhost:11434'}/api/tags`);
+      const data = await res.json();
+      const models = (data.models || []).map(m => m.name);
+      if (models.length > 0) {
+        return await select({
+          message: 'Select a model:',
+          choices: models.map(m => ({ name: m, value: m })),
+        });
+      }
+      return await input({
+        message: 'No models found. Enter model name manually:',
+        default: providerDef.defaultModel,
+      });
+    } catch {
+      return await input({
+        message: 'Could not connect to Ollama. Enter model name:',
+        default: providerDef.defaultModel,
+      });
+    }
+  }
+
+  if (provider === 'gemini') {
+    info('Checking Gemini models available to your API key...');
+    try {
+      const geminiProvider = new providerDef.class({
+        apiKey: config.apiKey || '',
+        baseUrl: config.baseUrl || providerDef.baseUrl,
+        fetchFn: globalThis.fetch,
+      });
+      const models = await geminiProvider.listModels();
+      if (models.length > 0) {
+        return await select({
+          message: 'Select a Gemini model:',
+          choices: models.map(m => ({ name: m, value: m })),
+          default: models.includes(providerDef.defaultModel) ? providerDef.defaultModel : undefined,
+        });
+      }
+      return await input({
+        message: 'No Gemini models were returned. Enter model name manually:',
+        default: providerDef.defaultModel,
+      });
+    } catch {
+      return await input({
+        message: 'Could not list Gemini models. Enter model name manually:',
+        default: providerDef.defaultModel,
+      });
+    }
+  }
+
+  if (providerDef.custom) {
+    return await input({
+      message: 'Enter the model name/ID:',
+      validate: (val) => val.length > 0 || 'Model name is required',
+    });
+  }
+
+  return await input({
+    message: 'Model to use:',
+    default: providerDef.defaultModel,
+  });
+}
+
 /**
  * Interactive first-run onboarding wizard.
  * Returns the completed config object.
@@ -61,40 +127,7 @@ export async function runOnboarding() {
   }
 
   // 4. Model
-  if (provider === 'ollama') {
-    info('Checking for available Ollama models...');
-    try {
-      const res = await fetch(`${config.baseUrl || 'http://localhost:11434'}/api/tags`);
-      const data = await res.json();
-      const models = (data.models || []).map(m => m.name);
-      if (models.length > 0) {
-        config.model = await select({
-          message: 'Select a model:',
-          choices: models.map(m => ({ name: m, value: m })),
-        });
-      } else {
-        config.model = await input({
-          message: 'No models found. Enter model name manually:',
-          default: providerDef.defaultModel,
-        });
-      }
-    } catch {
-      config.model = await input({
-        message: 'Could not connect to Ollama. Enter model name:',
-        default: providerDef.defaultModel,
-      });
-    }
-  } else if (providerDef.custom) {
-    config.model = await input({
-      message: 'Enter the model name/ID:',
-      validate: (val) => val.length > 0 || 'Model name is required',
-    });
-  } else {
-    config.model = await input({
-      message: 'Model to use:',
-      default: providerDef.defaultModel,
-    });
-  }
+  config.model = await chooseModelFromProvider(provider, providerDef, config);
 
   // 5. Proxy
   const useProxy = await confirm({

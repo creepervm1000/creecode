@@ -7,7 +7,7 @@ import { buildToolsPrompt, buildToolModeSystemPrompt, parseToolCalls, executeToo
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-const BASE_SYSTEM_PROMPT = `You are CreeCode, a helpful coding assistant running in the Web UI. You help users write, debug, and understand code. Be concise and precise. When showing code, use code blocks with the specified language, and do not forget to include Markdown in your message for styling. If the user needs to find vulnerabilities, only do so if the user has the script. Do not put any emojis in code comments.
+const BASE_SYSTEM_PROMPT = `You are CreeCode, a helpful coding assistant running in the Web UI. You help users write, debug, and understand code. Be concise and precise. When showing code, use code blocks with the specified language, and do not forget to include Markdown in your message for styling. When the user asks you to audit, explore, review, or find vulnerabilities in the current project, inspect the workspace immediately with tools. Do not ask the user to paste code that is already available in the current folder. If the user needs to find vulnerabilities, only do so if the user has the script. Do not put any emojis in code comments.
 
 Web UI mode has the SAME tool access as the CLI: you can read/write/edit files, run commands, search, and use the other tools. Trust prompts that would normally appear in the terminal are auto-resolved on the server according to the user's config; operations that are not permitted by config will return an error and you should report it.`;
 
@@ -31,6 +31,35 @@ function normalizeAssistantResponse(response) {
 
 function buildSystemPrompt(config, trustConfig) {
   return BASE_SYSTEM_PROMPT + buildToolModeSystemPrompt(config) + buildToolsPrompt(trustConfig, config);
+}
+
+function getLastUserText(messages) {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i]?.role === 'user' && typeof messages[i].content === 'string') {
+      return messages[i].content;
+    }
+  }
+  return '';
+}
+
+function isRepoAuditRequest(text) {
+  return /(find|search|audit|review|analy[sz]e|explore).*(vuln|vulnerab|security|bug|issue|folder|repo|project|codebase)|\b(vuln|vulnerab|security audit|reverse engineer)\b/i.test(text);
+}
+
+function isUnnecessaryContextRequest(text) {
+  return /share your code|provide.*code|what type of application|what programming languages|what would you like me to focus on|is there something specific you'd like me to do|could you please provide|please share your code|i need to understand what you're working with/i.test(text);
+}
+
+function isStallingInspectionPromise(text) {
+  return /(let me|i(?:'| wi)ll).*(explore|inspect|examine|search|look at|review).*(implementation|project|folder|codebase|files)/i.test(text);
+}
+
+function shouldInjectWorkspaceCorrection(messages, toolCalls, assistantText) {
+  if (toolCalls.length > 0) return false;
+  const lastUser = getLastUserText(messages);
+  if (!isRepoAuditRequest(lastUser)) return false;
+  if (lastUser.startsWith('[runtime correction]')) return false;
+  return isUnnecessaryContextRequest(assistantText) || isStallingInspectionPromise(assistantText);
 }
 
 export async function startWebUI(provider, config, port = 3000) {
@@ -95,6 +124,15 @@ export async function startWebUI(provider, config, port = 3000) {
             messages.push({
               role: 'user',
               content: 'You wrote a <tool_result> block yourself. That tag is produced ONLY by the runtime, after you emit a <tool_call> and the runtime actually runs the tool. No tool was actually run. If you want to use a tool, emit <tool_call>...</tool_call> and STOP — wait for the real <tool_result> in the next message.',
+            });
+            continue;
+          }
+
+          if (shouldInjectWorkspaceCorrection(messages, toolCalls, normalized.text)) {
+            send({ notice: 'Model stalled instead of inspecting the workspace. Injecting correction.' });
+            messages.push({
+              role: 'user',
+              content: '[runtime correction] The repository is already available in the current workspace. Do not ask the user to paste code or describe the project. Immediately inspect the project using tools and continue the audit. Start by reading or searching relevant files now.',
             });
             continue;
           }

@@ -2,13 +2,14 @@ import * as readline from 'node:readline';
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import chalk from 'chalk';
-import { select } from '@inquirer/prompts';
+import { select, input, confirm } from '@inquirer/prompts';
 import { createSpinner } from './utils/spinner.js';
 import { info, warn, dim, success, label } from './utils/logger.js';
 import { buildToolsPrompt, buildToolModeSystemPrompt, parseToolCalls, executeTool } from './tools/index.js';
 import { TRUST_LEVELS, TRUST_CATEGORIES } from './trust.js';
 import { saveConfig, loadConfig } from './config.js';
 import { setRawMode } from './utils/terminal.js';
+import { createProvider, getProviderChoices, PROVIDERS } from './providers/index.js';
 
 const HISTORY_DIR = join(process.cwd(), '.creecode');
 const HISTORY_FILE = join(HISTORY_DIR, 'conversation.json');
@@ -63,6 +64,7 @@ const BASE_SYSTEM_PROMPT = `You are CreeCode, an expert AI coding assistant runn
 - Explain what you're about to do before using tools.
 - If a command or edit fails, analyze the error and suggest fixes.
 - For complex tasks, break them into steps.
+- When the user asks you to audit, explore, review, or find vulnerabilities in the current project, inspect the workspace immediately with tools. Do not ask the user to paste code that is already available in the current folder.
 - Don't make any kind of modifications without asking the user, if the user already told you that you can do it when u want then its fine you dont need to ask
 - Don't break the users code, check what you are doing!
 - If you are working on a production codebase, don't make any changes without asking the user and be VERY CAREFUL WHAT YOU DO!
@@ -105,6 +107,96 @@ function buildSystemPrompt(trustConfig, config, customSystem = '') {
     + buildToolModeSystemPrompt(config)
     + (customSystem ? `\n\n${customSystem}` : '')
     + buildToolsPrompt(trustConfig, config);
+}
+
+function getLastUserText(messages) {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i]?.role === 'user' && typeof messages[i].content === 'string') {
+      return messages[i].content;
+    }
+  }
+  return '';
+}
+
+function isRepoAuditRequest(text) {
+  return /(find|search|audit|review|analy[sz]e|explore).*(vuln|vulnerab|security|bug|issue|folder|repo|project|codebase)|\b(vuln|vulnerab|security audit|reverse engineer)\b/i.test(text);
+}
+
+function isUnnecessaryContextRequest(text) {
+  return /share your code|provide.*code|what type of application|what programming languages|what would you like me to focus on|is there something specific you'd like me to do|could you please provide|please share your code|i need to understand what you're working with/i.test(text);
+}
+
+function isStallingInspectionPromise(text) {
+  return /(let me|i(?:'| wi)ll).*(explore|inspect|examine|search|look at|review).*(implementation|project|folder|codebase|files)/i.test(text);
+}
+
+function shouldInjectWorkspaceCorrection(messages, toolCalls, assistantText) {
+  if (toolCalls.length > 0) return false;
+  const lastUser = getLastUserText(messages);
+  if (!isRepoAuditRequest(lastUser)) return false;
+  if (lastUser.startsWith('[runtime correction]')) return false;
+  return isUnnecessaryContextRequest(assistantText) || isStallingInspectionPromise(assistantText);
+}
+
+async function chooseModelFromProvider(providerId, providerDef, config) {
+  if (providerId === 'ollama') {
+    info('Checking for available Ollama models...');
+    try {
+      const res = await fetch(`${config.baseUrl || 'http://localhost:11434'}/api/tags`);
+      const data = await res.json();
+      const models = (data.models || []).map(m => m.name);
+      if (models.length > 0) {
+        return await select({
+          message: 'Select a model:',
+          choices: models.map(m => ({ name: m, value: m })),
+        });
+      }
+    } catch {
+      // fall back to manual input below
+    }
+    return await input({
+      message: 'Enter Ollama model name:',
+      default: config.model || providerDef.defaultModel,
+    });
+  }
+
+  if (providerId === 'gemini') {
+    info('Checking Gemini models available to your API key...');
+    try {
+      const geminiProvider = new providerDef.class({
+        apiKey: config.apiKey || '',
+        baseUrl: config.baseUrl || providerDef.baseUrl,
+        fetchFn: globalThis.fetch,
+      });
+      const models = await geminiProvider.listModels();
+      if (models.length > 0) {
+        return await select({
+          message: 'Select a Gemini model:',
+          choices: models.map(m => ({ name: m, value: m })),
+          default: models.includes(config.model) ? config.model : undefined,
+        });
+      }
+    } catch {
+      // fall back to manual input below
+    }
+    return await input({
+      message: 'Enter Gemini model name:',
+      default: config.model || providerDef.defaultModel,
+    });
+  }
+
+  if (providerDef.custom) {
+    return await input({
+      message: 'Enter the model name/ID:',
+      default: config.model || '',
+      validate: (val) => val.length > 0 || 'Model name is required',
+    });
+  }
+
+  return await input({
+    message: 'Model to use:',
+    default: config.model || providerDef.defaultModel,
+  });
 }
 
 /**
@@ -182,7 +274,9 @@ export async function startChat(provider, config) {
         }
 
         if (trimmed.startsWith('/')) {
-          await handleCommand(trimmed, messages, config, provider, rl, trustConfig, (newSystemPrompt) => {
+          await handleCommand(trimmed, messages, config, provider, rl, trustConfig, (newProvider) => {
+            provider = newProvider;
+          }, (newSystemPrompt) => {
             systemPrompt = newSystemPrompt;
             messages[0] = { role: 'system', content: systemPrompt };
           });
@@ -295,6 +389,15 @@ async function agentLoop(provider, messages, config, trustConfig) {
       continue;
     }
 
+    if (shouldInjectWorkspaceCorrection(messages, toolCalls, normalized.text)) {
+      warn('Model stalled instead of inspecting the workspace. Injecting correction.\n');
+      messages.push({
+        role: 'user',
+        content: '[runtime correction] The repository is already available in the current workspace. Do not ask the user to paste code or describe the project. Immediately inspect the project using tools and continue the audit. Start by reading or searching relevant files now.',
+      });
+      continue;
+    }
+
     // No tool calls — we're done
     if (toolCalls.length === 0) {
       saveHistory(messages);
@@ -381,7 +484,7 @@ function summarizeResult(toolName, result) {
 /**
  * Handle slash commands.
  */
-async function handleCommand(input, messages, config, provider, rl, trustConfig, onSystemPromptChange) {
+async function handleCommand(input, messages, config, provider, rl, trustConfig, onProviderChange, onSystemPromptChange) {
   const cmd = input.split(' ')[0];
 
   switch (cmd) {
@@ -422,7 +525,7 @@ async function handleCommand(input, messages, config, provider, rl, trustConfig,
       break;
 
     case '/settings':
-      await openSettings(config, provider, trustConfig, onSystemPromptChange);
+      await openSettings(config, provider, trustConfig, onProviderChange, onSystemPromptChange);
       break;
 
     default:
@@ -443,12 +546,14 @@ async function handleCommand(input, messages, config, provider, rl, trustConfig,
 /**
  * Interactive settings menu.
  */
-async function openSettings(config, provider, trustConfig, onSystemPromptChange) {
+async function openSettings(config, provider, trustConfig, onProviderChange, onSystemPromptChange) {
   console.log(chalk.white.bold('\n  ⚙  Settings\n'));
 
   const setting = await select({
     message: 'What would you like to configure?',
     choices: [
+      { name: `Provider             [${config.provider}]`, value: 'provider' },
+      { name: `Model                [${config.model || 'default'}]`, value: 'model' },
       { name: `Commands Trust Level  [${trustConfig.commands}]`, value: 'commands' },
       { name: `File Edit Trust Level [${trustConfig.files}]`, value: 'files' },
       { name: `Tool Calling Mode   [${config.toolCallMode || 'xml'}]`, value: 'toolCallMode' },
@@ -457,6 +562,74 @@ async function openSettings(config, provider, trustConfig, onSystemPromptChange)
   });
 
   if (setting === 'back') {
+    console.log();
+    return;
+  }
+
+  if (setting === 'provider') {
+    const providerId = await select({
+      message: 'Choose provider:',
+      choices: getProviderChoices(),
+      default: config.provider,
+    });
+    const providerDef = PROVIDERS[providerId];
+    const nextConfig = { ...config, provider: providerId };
+
+    if (providerDef.custom) {
+      nextConfig.baseUrl = await input({
+        message: 'Enter the API base URL:',
+        default: nextConfig.baseUrl || providerDef.baseUrl || '',
+        validate: (val) => val.length > 0 || 'Base URL is required for custom providers',
+      });
+    } else {
+      const useDefaultBaseUrl = await confirm({
+        message: `Use default base URL (${providerDef.baseUrl})?`,
+        default: true,
+      });
+      nextConfig.baseUrl = useDefaultBaseUrl
+        ? providerDef.baseUrl
+        : await input({
+          message: 'Enter custom base URL:',
+          default: nextConfig.baseUrl || providerDef.baseUrl,
+        });
+    }
+
+    if (providerDef.needsKey) {
+      nextConfig.apiKey = await input({
+        message: `Enter ${providerDef.name} API key:`,
+        default: nextConfig.apiKey || '',
+        validate: (val) => val.length > 0 || 'API key is required',
+      });
+    } else {
+      nextConfig.apiKey = '';
+    }
+
+    nextConfig.model = await chooseModelFromProvider(providerId, providerDef, nextConfig);
+    const newProvider = createProvider(nextConfig);
+
+    Object.assign(config, nextConfig);
+    saveConfig(config);
+    onProviderChange(newProvider);
+
+    const updated = buildSystemPrompt(trustConfig, config);
+    onSystemPromptChange(updated);
+
+    success(`Provider set to: ${providerDef.name} (${config.model})`);
+    console.log();
+    return;
+  }
+
+  if (setting === 'model') {
+    const providerDef = PROVIDERS[config.provider];
+    config.model = await chooseModelFromProvider(config.provider, providerDef, config);
+    const newProvider = createProvider(config);
+    saveConfig(config);
+    onProviderChange(newProvider);
+
+    const updated = buildSystemPrompt(trustConfig, config);
+    onSystemPromptChange(updated);
+
+    success(`Model set to: ${config.model}`);
     console.log();
     return;
   }
