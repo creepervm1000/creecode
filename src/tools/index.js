@@ -66,6 +66,20 @@ const TOOL_CALL_MODE_DESCRIPTIONS = {
   both: 'Allow either provider-native tool calling or XML <tool_call> blocks.',
 };
 
+export function buildToolModeSystemPrompt(config = {}) {
+  const toolCallMode = config.toolCallMode || 'xml';
+
+  if (toolCallMode === 'native') {
+    return `\n## Tool Calling Behavior\n- Prefer provider-native tool calling whenever it is available.\n- Do not print XML <tool_call> blocks unless native tool calling is unavailable or fails.\n- Never fabricate tool results in plain text.\n`;
+  }
+
+  if (toolCallMode === 'both') {
+    return `\n## Tool Calling Behavior\n- Prefer provider-native tool calling when available.\n- If native tool calling is unavailable or unreliable, fall back to XML <tool_call> blocks.\n- Never fabricate tool results in plain text.\n`;
+  }
+
+  return `\n## Tool Calling Behavior\n- Use XML <tool_call> blocks for tool use.\n- Do not rely on provider-native tool calling.\n- Never fabricate tool results in plain text.\n`;
+}
+
 function isToolEnabled(tool, config) {
   const disabled = config.disabledTools || [];
   if (disabled.includes(tool.name)) return false;

@@ -5,7 +5,7 @@ import chalk from 'chalk';
 import { select } from '@inquirer/prompts';
 import { createSpinner } from './utils/spinner.js';
 import { info, warn, dim, success, label } from './utils/logger.js';
-import { buildToolsPrompt, parseToolCalls, executeTool } from './tools/index.js';
+import { buildToolsPrompt, buildToolModeSystemPrompt, parseToolCalls, executeTool } from './tools/index.js';
 import { TRUST_LEVELS, TRUST_CATEGORIES } from './trust.js';
 import { saveConfig, loadConfig } from './config.js';
 import { setRawMode } from './utils/terminal.js';
@@ -100,6 +100,13 @@ function normalizeAssistantResponse(response) {
   };
 }
 
+function buildSystemPrompt(trustConfig, config, customSystem = '') {
+  return BASE_SYSTEM_PROMPT
+    + buildToolModeSystemPrompt(config)
+    + (customSystem ? `\n\n${customSystem}` : '')
+    + buildToolsPrompt(trustConfig, config);
+}
+
 /**
  * Start the interactive chat REPL with tool support.
  */
@@ -141,7 +148,7 @@ export async function startChat(provider, config) {
 
     // Build system prompt with available tools
     const trustConfig = config.trust || { commands: 'prompt-trust', files: 'prompt-trust' };
-    let systemPrompt = BASE_SYSTEM_PROMPT + buildToolsPrompt(trustConfig, config);
+    let systemPrompt = buildSystemPrompt(trustConfig, config);
 
     const messages = [
       { role: 'system', content: systemPrompt },
@@ -394,7 +401,7 @@ async function handleCommand(input, messages, config, provider, rl, trustConfig,
 
     case '/clear':
       {
-        const currentSystemPrompt = messages[0]?.content || BASE_SYSTEM_PROMPT + buildToolsPrompt(trustConfig, config);
+        const currentSystemPrompt = messages[0]?.content || buildSystemPrompt(trustConfig, config);
         messages.length = 0;
         messages.push({ role: 'system', content: currentSystemPrompt });
       }
@@ -422,7 +429,7 @@ async function handleCommand(input, messages, config, provider, rl, trustConfig,
       if (input.startsWith('/system ')) {
         const newSystem = input.slice(8).trim();
         if (newSystem) {
-          const updated = BASE_SYSTEM_PROMPT + '\n\n' + newSystem + buildToolsPrompt(trustConfig, config);
+          const updated = buildSystemPrompt(trustConfig, config, newSystem);
           onSystemPromptChange(updated);
           success('System prompt updated.\n');
         }
@@ -465,7 +472,7 @@ async function openSettings(config, provider, trustConfig, onSystemPromptChange)
     provider.toolCallMode = newMode;
     saveConfig(config);
 
-    const updated = BASE_SYSTEM_PROMPT + buildToolsPrompt(trustConfig, config);
+    const updated = buildSystemPrompt(trustConfig, config);
     onSystemPromptChange(updated);
 
     success(`Tool calling mode set to: ${newMode}`);
@@ -487,7 +494,7 @@ async function openSettings(config, provider, trustConfig, onSystemPromptChange)
   config.trust = { ...trustConfig };
   saveConfig(config);
 
-  const updated = BASE_SYSTEM_PROMPT + buildToolsPrompt(trustConfig, config);
+  const updated = buildSystemPrompt(trustConfig, config);
   onSystemPromptChange(updated);
 
   success(`${TRUST_CATEGORIES[setting]} trust set to: ${newLevel}`);

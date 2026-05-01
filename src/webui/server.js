@@ -2,7 +2,7 @@ import express from 'express';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { success, info } from '../utils/logger.js';
-import { buildToolsPrompt, parseToolCalls, executeTool } from '../tools/index.js';
+import { buildToolsPrompt, buildToolModeSystemPrompt, parseToolCalls, executeTool } from '../tools/index.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -29,6 +29,10 @@ function normalizeAssistantResponse(response) {
   };
 }
 
+function buildSystemPrompt(config, trustConfig) {
+  return BASE_SYSTEM_PROMPT + buildToolModeSystemPrompt(config) + buildToolsPrompt(trustConfig, config);
+}
+
 export async function startWebUI(provider, config, port = 3000) {
   return new Promise((resolve, reject) => {
     const app = express();
@@ -36,7 +40,7 @@ export async function startWebUI(provider, config, port = 3000) {
     app.use(express.static(join(__dirname, 'public')));
 
     const trustConfig = config.trust || { commands: 'prompt-trust', files: 'prompt-trust' };
-    const systemPrompt = BASE_SYSTEM_PROMPT + buildToolsPrompt(trustConfig, config);
+    const systemPrompt = buildSystemPrompt(config, trustConfig);
 
     let messages = [{ role: 'system', content: systemPrompt }];
 
