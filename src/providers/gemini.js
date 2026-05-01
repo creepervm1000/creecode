@@ -121,7 +121,7 @@ export class GeminiProvider extends BaseProvider {
           for (const part of parts) {
             if (part.text) {
               full += part.text;
-              if (onChunk) onChunk(part.text);
+              this.emitContent(onChunk, part.text);
             }
           }
         } catch {

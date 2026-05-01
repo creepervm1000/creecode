@@ -90,6 +90,7 @@ function normalizeAssistantResponse(response) {
   if (typeof response === 'string') {
     return {
       text: response,
+      thinking: '',
       nativeToolCalls: [],
       assistantMessage: { role: 'assistant', content: response },
     };
@@ -97,6 +98,7 @@ function normalizeAssistantResponse(response) {
 
   return {
     text: response?.content || '',
+    thinking: response?.thinking || '',
     nativeToolCalls: response?.nativeToolCalls || [],
     assistantMessage: response?.assistantMessage || { role: 'assistant', content: response?.content || '' },
   };
@@ -330,16 +332,36 @@ async function agentLoop(provider, messages, config, trustConfig) {
 
     let fullResponse = '';
     let rawResponse = '';
+    let sawThinking = false;
+    let sawContent = false;
 
     try {
       let firstChunk = true;
-      rawResponse = await provider.streamChat(messages, (chunk) => {
-        if (firstChunk) {
-          spinner.stop();
-          process.stdout.write('\n');
-          firstChunk = false;
-        }
-        process.stdout.write(chalk.white(chunk));
+      rawResponse = await provider.streamChat(messages, {
+        onThinking: (chunk) => {
+          if (firstChunk) {
+            spinner.stop();
+            process.stdout.write('\n');
+            firstChunk = false;
+          }
+          if (!sawThinking) {
+            process.stdout.write(chalk.gray('Thinking:\n'));
+            sawThinking = true;
+          }
+          process.stdout.write(chalk.gray(chunk));
+        },
+        onContent: (chunk) => {
+          if (firstChunk) {
+            spinner.stop();
+            process.stdout.write('\n');
+            firstChunk = false;
+          }
+          if (sawThinking && !sawContent) {
+            process.stdout.write(chalk.white('\n\nAnswer:\n'));
+          }
+          sawContent = true;
+          process.stdout.write(chalk.white(chunk));
+        },
       });
 
       const normalized = normalizeAssistantResponse(rawResponse);
@@ -348,6 +370,8 @@ async function agentLoop(provider, messages, config, trustConfig) {
       if (firstChunk) {
         spinner.stop();
         process.stdout.write('\n' + chalk.white(fullResponse));
+      } else if (sawThinking && !sawContent && fullResponse) {
+        process.stdout.write(chalk.white('\n\nAnswer:\n' + fullResponse));
       }
       console.log('\n');
     } catch (err) {

@@ -102,7 +102,7 @@ export class AnthropicProvider extends BaseProvider {
           const json = JSON.parse(payload);
           if (json.type === 'content_block_delta' && json.delta?.text) {
             full += json.delta.text;
-            if (onChunk) onChunk(json.delta.text);
+            this.emitContent(onChunk, json.delta.text);
           }
         } catch {
           // skip

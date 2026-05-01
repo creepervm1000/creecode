@@ -14,6 +14,20 @@ export class BaseProvider {
     return false;
   }
 
+  emitContent(callbacks, chunk) {
+    if (!chunk) return;
+    if (typeof callbacks === 'function') {
+      callbacks(chunk);
+      return;
+    }
+    if (callbacks?.onContent) callbacks.onContent(chunk);
+  }
+
+  emitThinking(callbacks, chunk) {
+    if (!chunk) return;
+    if (callbacks?.onThinking) callbacks.onThinking(chunk);
+  }
+
   /**
    * Send messages and get a complete response.
    * @param {Array<{role: string, content: string}>} messages
@@ -32,7 +46,12 @@ export class BaseProvider {
   async streamChat(messages, onChunk) {
     // Default: fall back to non-streaming
     const response = await this.chat(messages);
-    if (onChunk) onChunk(response);
+    if (typeof response === 'string') {
+      this.emitContent(onChunk, response);
+    } else {
+      this.emitThinking(onChunk, response?.thinking || '');
+      this.emitContent(onChunk, response?.content || '');
+    }
     return response;
   }
 

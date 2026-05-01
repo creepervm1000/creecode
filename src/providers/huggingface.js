@@ -103,7 +103,7 @@ export class HuggingFaceProvider extends BaseProvider {
 
       const data = await res.json();
       const parsed = this.parseAssistantMessage(data.choices?.[0]?.message || {});
-      if (parsed.content && onChunk) onChunk(parsed.content);
+      this.emitContent(onChunk, parsed.content);
       return parsed;
     }
 
@@ -145,7 +145,7 @@ export class HuggingFaceProvider extends BaseProvider {
           const chunk = json.choices?.[0]?.delta?.content || '';
           if (chunk) {
             full += chunk;
-            if (onChunk) onChunk(chunk);
+            this.emitContent(onChunk, chunk);
           }
         } catch {
           // skip

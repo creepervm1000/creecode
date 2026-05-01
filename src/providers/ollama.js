@@ -20,6 +20,10 @@ export class OllamaProvider extends BaseProvider {
     return ['native', 'both'].includes(this.toolCallMode) && this.supportsNativeToolCalling();
   }
 
+  supportsSeparateThinking() {
+    return /qwen3|qwen3-coder|gpt-oss|deepseek/i.test(this.model);
+  }
+
   buildPayload(messages, { stream = false } = {}) {
     const payload = {
       model: this.model,
@@ -31,11 +35,16 @@ export class OllamaProvider extends BaseProvider {
       payload.tools = buildNativeToolDefinitions();
     }
 
+    if (this.supportsSeparateThinking()) {
+      payload.think = true;
+    }
+
     return payload;
   }
 
   parseAssistantMessage(message = {}) {
     const content = typeof message.content === 'string' ? message.content : '';
+    const thinking = typeof message.thinking === 'string' ? message.thinking : '';
     const nativeToolCalls = (message.tool_calls || [])
       .filter(tc => tc?.function?.name)
       .map(tc => ({
@@ -45,6 +54,7 @@ export class OllamaProvider extends BaseProvider {
 
     return {
       content,
+      thinking,
       nativeToolCalls,
       assistantMessage: {
         role: 'assistant',
@@ -79,7 +89,9 @@ export class OllamaProvider extends BaseProvider {
     const data = await res.json();
     return this.shouldUseNativeToolCalling()
       ? this.parseAssistantMessage(data.message || {})
-      : (data.message?.content || '');
+      : this.supportsSeparateThinking()
+        ? this.parseAssistantMessage(data.message || {})
+        : (data.message?.content || '');
   }
 
   async streamChat(messages, onChunk) {
@@ -97,6 +109,7 @@ export class OllamaProvider extends BaseProvider {
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let full = '';
+    let thinking = '';
     let buffer = '';
     let toolCalls = [];
 
@@ -112,10 +125,15 @@ export class OllamaProvider extends BaseProvider {
         if (!line.trim()) continue;
         try {
           const json = JSON.parse(line);
+          const thinkingChunk = json.message?.thinking || '';
+          if (thinkingChunk) {
+            thinking += thinkingChunk;
+            this.emitThinking(onChunk, thinkingChunk);
+          }
           const chunk = json.message?.content || '';
           if (chunk) {
             full += chunk;
-            if (onChunk) onChunk(chunk);
+            this.emitContent(onChunk, chunk);
           }
           if (json.message?.tool_calls?.length) {
             toolCalls.push(...json.message.tool_calls);
@@ -129,7 +147,15 @@ export class OllamaProvider extends BaseProvider {
     if (this.shouldUseNativeToolCalling()) {
       return this.parseAssistantMessage({
         content: full,
+        thinking,
         tool_calls: toolCalls,
+      });
+    }
+
+    if (this.supportsSeparateThinking()) {
+      return this.parseAssistantMessage({
+        content: full,
+        thinking,
       });
     }
 
