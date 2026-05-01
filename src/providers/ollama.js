@@ -1,4 +1,5 @@
 import { BaseProvider } from './base.js';
+import { buildNativeToolDefinitions } from '../tools/index.js';
 
 /**
  * Ollama provider for local models.
@@ -9,6 +10,48 @@ export class OllamaProvider extends BaseProvider {
     super(config);
     this.baseUrl = config.baseUrl || 'http://localhost:11434';
     this.model = config.model || 'llama3.2';
+  }
+
+  supportsNativeToolCalling() {
+    return true;
+  }
+
+  shouldUseNativeToolCalling() {
+    return ['native', 'both'].includes(this.toolCallMode) && this.supportsNativeToolCalling();
+  }
+
+  buildPayload(messages, { stream = false } = {}) {
+    const payload = {
+      model: this.model,
+      messages,
+      stream,
+    };
+
+    if (this.shouldUseNativeToolCalling()) {
+      payload.tools = buildNativeToolDefinitions();
+    }
+
+    return payload;
+  }
+
+  parseAssistantMessage(message = {}) {
+    const content = typeof message.content === 'string' ? message.content : '';
+    const nativeToolCalls = (message.tool_calls || [])
+      .filter(tc => tc?.function?.name)
+      .map(tc => ({
+        name: tc.function.name,
+        args: tc.function.arguments || {},
+      }));
+
+    return {
+      content,
+      nativeToolCalls,
+      assistantMessage: {
+        role: 'assistant',
+        content,
+        ...(message.tool_calls ? { tool_calls: message.tool_calls } : {}),
+      },
+    };
   }
 
   /**
@@ -30,26 +73,20 @@ export class OllamaProvider extends BaseProvider {
     const res = await this.request(`${this.baseUrl}/api/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: this.model,
-        messages,
-        stream: false,
-      }),
+      body: JSON.stringify(this.buildPayload(messages, { stream: false })),
     });
 
     const data = await res.json();
-    return data.message?.content || '';
+    return this.shouldUseNativeToolCalling()
+      ? this.parseAssistantMessage(data.message || {})
+      : (data.message?.content || '');
   }
 
   async streamChat(messages, onChunk) {
     const res = await this.fetchFn(`${this.baseUrl}/api/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: this.model,
-        messages,
-        stream: true,
-      }),
+      body: JSON.stringify(this.buildPayload(messages, { stream: true })),
     });
 
     if (!res.ok) {
@@ -61,6 +98,7 @@ export class OllamaProvider extends BaseProvider {
     const decoder = new TextDecoder();
     let full = '';
     let buffer = '';
+    let toolCalls = [];
 
     while (true) {
       const { done, value } = await reader.read();
@@ -79,10 +117,20 @@ export class OllamaProvider extends BaseProvider {
             full += chunk;
             if (onChunk) onChunk(chunk);
           }
+          if (json.message?.tool_calls?.length) {
+            toolCalls.push(...json.message.tool_calls);
+          }
         } catch {
           // skip
         }
       }
+    }
+
+    if (this.shouldUseNativeToolCalling()) {
+      return this.parseAssistantMessage({
+        content: full,
+        tool_calls: toolCalls,
+      });
     }
 
     return full;
