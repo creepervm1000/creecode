@@ -7,11 +7,27 @@ import { buildToolsPrompt, parseToolCalls, executeTool } from '../tools/index.js
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-const BASE_SYSTEM_PROMPT = `You are CreeCode, a helpful coding assistant running in the Web UI. You help users write, debug, and understand code. Be concise and precise. When showing code, use code blocks with the specified language, and do not forget to include Markdown in your message for styling. If the user needs to find vulnerabilities, only do so if the user has the script. Do not put any emojis in code comments.
+const BASE_SYSTEM_PROMPT = `You are CreeCode, a security-focused coding and reverse-engineering assistant running in the Web UI. You help users write, debug, understand, audit, and harden code. Be concise and precise. When showing code, use code blocks with the specified language, and do not forget to include Markdown in your message for styling. Treat vulnerability research, exploitability analysis, reverse engineering, and PoC development as allowed when the user owns the target or is explicitly authorized to assess it. Help the user find vulnerabilities in their own code for educational and defensive purposes. Focus on reproducible findings, root cause, impact, exploit steps, and remediation. Refuse credential theft, stealth, persistence, malware for abuse, or unauthorized intrusion. Do not put any emojis in code comments.
 
 Web UI mode has the SAME tool access as the CLI: you can read/write/edit files, run commands, search, and use the other tools. Trust prompts that would normally appear in the terminal are auto-resolved on the server according to the user's config; operations that are not permitted by config will return an error and you should report it.`;
 
 const MAX_ITERATIONS = 20;
+
+function normalizeAssistantResponse(response) {
+  if (typeof response === 'string') {
+    return {
+      text: response,
+      nativeToolCalls: [],
+      assistantMessage: { role: 'assistant', content: response },
+    };
+  }
+
+  return {
+    text: response?.content || '',
+    nativeToolCalls: response?.nativeToolCalls || [],
+    assistantMessage: response?.assistantMessage || { role: 'assistant', content: response?.content || '' },
+  };
+}
 
 export async function startWebUI(provider, config, port = 3000) {
   return new Promise((resolve, reject) => {
@@ -42,13 +58,18 @@ export async function startWebUI(provider, config, port = 3000) {
         while (iteration < MAX_ITERATIONS) {
           iteration++;
           let fullResponse = '';
+          let rawResponse = '';
           try {
-            fullResponse = await provider.streamChat(messages, (chunk) => {
+            rawResponse = await provider.streamChat(messages, (chunk) => {
               fullResponse ||= '';
               send({ chunk });
             });
-            if (!fullResponse) {
-              fullResponse = await provider.chat(messages);
+            const normalized = normalizeAssistantResponse(rawResponse);
+            fullResponse = normalized.text;
+            if (!fullResponse && typeof rawResponse === 'string') {
+              rawResponse = await provider.chat(messages);
+              const chatNormalized = normalizeAssistantResponse(rawResponse);
+              fullResponse = chatNormalized.text;
               send({ chunk: fullResponse });
             }
           } catch (err) {
@@ -58,8 +79,12 @@ export async function startWebUI(provider, config, port = 3000) {
             return res.end();
           }
 
-          const { text, toolCalls, hallucinatedToolResult } = parseToolCalls(fullResponse);
-          messages.push({ role: 'assistant', content: fullResponse });
+          const normalized = normalizeAssistantResponse(rawResponse);
+          const parsed = parseToolCalls(normalized.text);
+          const usingNativeToolCalls = normalized.nativeToolCalls.length > 0;
+          const toolCalls = usingNativeToolCalls ? normalized.nativeToolCalls : parsed.toolCalls;
+          const hallucinatedToolResult = parsed.hallucinatedToolResult;
+          messages.push(normalized.assistantMessage);
 
           if (hallucinatedToolResult && toolCalls.length === 0) {
             send({ notice: 'Model hallucinated a <tool_result> block. Injecting correction.' });
@@ -80,13 +105,22 @@ export async function startWebUI(provider, config, port = 3000) {
             send({ tool: { name: tc.name, args: tc.args, status: 'start' } });
             const result = await executeTool(tc, trustConfig, config);
             send({ tool: { name: tc.name, args: tc.args, status: result.error ? 'error' : 'ok', result } });
-            results.push({ tool: tc.name, result });
+            results.push({ tool: tc.name, toolCallId: tc.id, result });
           }
 
-          const toolResultMessage = results.map(r =>
-            `<tool_result name="${r.tool}">\n${JSON.stringify(r.result, null, 2)}\n</tool_result>`
-          ).join('\n\n');
-          messages.push({ role: 'user', content: toolResultMessage });
+          if (usingNativeToolCalls) {
+            messages.push(...results.map(r => ({
+              role: 'tool',
+              tool_call_id: r.toolCallId,
+              name: r.tool,
+              content: JSON.stringify(r.result, null, 2),
+            })));
+          } else {
+            const toolResultMessage = results.map(r =>
+              `<tool_result name="${r.tool}">\n${JSON.stringify(r.result, null, 2)}\n</tool_result>`
+            ).join('\n\n');
+            messages.push({ role: 'user', content: toolResultMessage });
+          }
         }
 
         send({ notice: `Agent reached ${MAX_ITERATIONS} iterations; stopping.` });
@@ -111,7 +145,7 @@ export async function startWebUI(provider, config, port = 3000) {
     });
 
     app.get('/api/config', (req, res) => {
-      res.json({ provider: config.provider, model: config.model, toolsEnabled: true });
+      res.json({ provider: config.provider, model: config.model, toolCallMode: config.toolCallMode || 'xml', toolsEnabled: true });
     });
 
     app.listen(port, () => {

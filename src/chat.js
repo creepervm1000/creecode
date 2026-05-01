@@ -54,7 +54,7 @@ function loadHistory() {
   return [];
 }
 
-const BASE_SYSTEM_PROMPT = `You are CreeCode, an expert AI coding assistant running in the user's terminal. You help users write, debug, understand, and refactor code. You have direct access to their file system and can run shell commands.
+const BASE_SYSTEM_PROMPT = `You are CreeCode, an expert AI assistant for software engineering, security research, reverse engineering, and vulnerability discovery running in the user's terminal. You help users audit, write, debug, understand, refactor, and harden code. You have direct access to their file system and can run shell commands.
 
 ## Guidelines
 - Be concise and precise.
@@ -63,6 +63,10 @@ const BASE_SYSTEM_PROMPT = `You are CreeCode, an expert AI coding assistant runn
 - Explain what you're about to do before using tools.
 - If a command or edit fails, analyze the error and suggest fixes.
 - For complex tasks, break them into steps.
+- Treat requests for vulnerability research, exploitability analysis, reverse engineering, PoC development, and security testing as educational work on code, binaries, services, or systems the user owns or is explicitly authorized to assess.
+- When doing security work, focus on reproducible findings, root cause, attack surface, impact, proof-of-concept steps, and clear remediation advice.
+- You may help find vulnerabilities in the user's own code and explain how they could be exploited so the user can fix them.
+- Keep offensive security work bounded to local, lab, CTF, or explicitly authorized targets. Refuse credential theft, persistence, stealth, unauthorized intrusion, or malware intended for real-world abuse.
 - Don't make any kind of modifications without asking the user, if the user already told you that you can do it when u want then its fine you dont need to ask
 - Don't break the users code, check what you are doing!
 - If you are working on a production codebase, don't make any changes without asking the user and be VERY CAREFUL WHAT YOU DO!
@@ -77,6 +81,28 @@ const COMMANDS = {
   '/system': 'Set a custom system prompt',
   '/exit': 'Exit CreeCode',
 };
+
+const TOOL_CALL_MODE_CHOICES = [
+  { name: 'XML Tags — model emits <tool_call> blocks', value: 'xml' },
+  { name: 'Native — use provider-native tool calling when supported', value: 'native' },
+  { name: 'Both — allow native tool calling and XML fallback', value: 'both' },
+];
+
+function normalizeAssistantResponse(response) {
+  if (typeof response === 'string') {
+    return {
+      text: response,
+      nativeToolCalls: [],
+      assistantMessage: { role: 'assistant', content: response },
+    };
+  }
+
+  return {
+    text: response?.content || '',
+    nativeToolCalls: response?.nativeToolCalls || [],
+    assistantMessage: response?.assistantMessage || { role: 'assistant', content: response?.content || '' },
+  };
+}
 
 /**
  * Start the interactive chat REPL with tool support.
@@ -153,7 +179,7 @@ export async function startChat(provider, config) {
         }
 
         if (trimmed.startsWith('/')) {
-          await handleCommand(trimmed, messages, config, rl, trustConfig, (newSystemPrompt) => {
+          await handleCommand(trimmed, messages, config, provider, rl, trustConfig, (newSystemPrompt) => {
             systemPrompt = newSystemPrompt;
             messages[0] = { role: 'system', content: systemPrompt };
           });
@@ -206,10 +232,11 @@ async function agentLoop(provider, messages, config, trustConfig) {
     spinner.start();
 
     let fullResponse = '';
+    let rawResponse = '';
 
     try {
       let firstChunk = true;
-      fullResponse = await provider.streamChat(messages, (chunk) => {
+      rawResponse = await provider.streamChat(messages, (chunk) => {
         if (firstChunk) {
           spinner.stop();
           process.stdout.write('\n');
@@ -217,6 +244,9 @@ async function agentLoop(provider, messages, config, trustConfig) {
         }
         process.stdout.write(chalk.white(chunk));
       });
+
+      const normalized = normalizeAssistantResponse(rawResponse);
+      fullResponse = normalized.text;
 
       if (firstChunk) {
         spinner.stop();
@@ -242,8 +272,12 @@ async function agentLoop(provider, messages, config, trustConfig) {
     }
 
     // Parse tool calls from the response
-    const { text, toolCalls, hallucinatedToolResult } = parseToolCalls(fullResponse);
-    messages.push({ role: 'assistant', content: fullResponse });
+    const normalized = normalizeAssistantResponse(rawResponse);
+    const parsed = parseToolCalls(normalized.text);
+    const usingNativeToolCalls = normalized.nativeToolCalls.length > 0;
+    const toolCalls = usingNativeToolCalls ? normalized.nativeToolCalls : parsed.toolCalls;
+    const hallucinatedToolResult = parsed.hallucinatedToolResult;
+    messages.push(normalized.assistantMessage);
 
     // Model invented a <tool_result> block without actually emitting a tool
     // call — common failure mode on smaller models (gpt-oss:20b etc.). Inject
@@ -278,15 +312,24 @@ async function agentLoop(provider, messages, config, trustConfig) {
         console.log(chalk.green(`    ✔ ${summary}\n`));
       }
 
-      results.push({ tool: tc.name, result });
+      results.push({ tool: tc.name, toolCallId: tc.id, result });
     }
 
     // Feed tool results back to the AI
-    const toolResultMessage = results.map(r =>
-      `<tool_result name="${r.tool}">\n${JSON.stringify(r.result, null, 2)}\n</tool_result>`
-    ).join('\n\n');
+    if (usingNativeToolCalls) {
+      messages.push(...results.map(r => ({
+        role: 'tool',
+        tool_call_id: r.toolCallId,
+        name: r.tool,
+        content: JSON.stringify(r.result, null, 2),
+      })));
+    } else {
+      const toolResultMessage = results.map(r =>
+        `<tool_result name="${r.tool}">\n${JSON.stringify(r.result, null, 2)}\n</tool_result>`
+      ).join('\n\n');
 
-    messages.push({ role: 'user', content: toolResultMessage });
+      messages.push({ role: 'user', content: toolResultMessage });
+    }
 
     // Continue the loop so the AI can process results and potentially call more tools
   }
@@ -335,7 +378,7 @@ function summarizeResult(toolName, result) {
 /**
  * Handle slash commands.
  */
-async function handleCommand(input, messages, config, rl, trustConfig, onSystemPromptChange) {
+async function handleCommand(input, messages, config, provider, rl, trustConfig, onSystemPromptChange) {
   const cmd = input.split(' ')[0];
 
   switch (cmd) {
@@ -366,6 +409,7 @@ async function handleCommand(input, messages, config, rl, trustConfig, onSystemP
     case '/model':
       info(`Provider: ${config.provider}`);
       info(`Model: ${config.model}`);
+      info(`Tool Calling: ${config.toolCallMode || 'xml'}`);
       info(`Base URL: ${config.baseUrl || 'default'}\n`);
       break;
 
@@ -375,7 +419,7 @@ async function handleCommand(input, messages, config, rl, trustConfig, onSystemP
       break;
 
     case '/settings':
-      await openSettings(config, trustConfig, onSystemPromptChange);
+      await openSettings(config, provider, trustConfig, onSystemPromptChange);
       break;
 
     default:
@@ -396,7 +440,7 @@ async function handleCommand(input, messages, config, rl, trustConfig, onSystemP
 /**
  * Interactive settings menu.
  */
-async function openSettings(config, trustConfig, onSystemPromptChange) {
+async function openSettings(config, provider, trustConfig, onSystemPromptChange) {
   console.log(chalk.white.bold('\n  ⚙  Settings\n'));
 
   const setting = await select({
@@ -404,11 +448,31 @@ async function openSettings(config, trustConfig, onSystemPromptChange) {
     choices: [
       { name: `Commands Trust Level  [${trustConfig.commands}]`, value: 'commands' },
       { name: `File Edit Trust Level [${trustConfig.files}]`, value: 'files' },
+      { name: `Tool Calling Mode   [${config.toolCallMode || 'xml'}]`, value: 'toolCallMode' },
       { name: 'Back', value: 'back' },
     ],
   });
 
   if (setting === 'back') {
+    console.log();
+    return;
+  }
+
+  if (setting === 'toolCallMode') {
+    const newMode = await select({
+      message: 'Set tool calling mode:',
+      choices: TOOL_CALL_MODE_CHOICES,
+      default: config.toolCallMode || 'xml',
+    });
+
+    config.toolCallMode = newMode;
+    provider.toolCallMode = newMode;
+    saveConfig(config);
+
+    const updated = BASE_SYSTEM_PROMPT + buildToolsPrompt(trustConfig, config);
+    onSystemPromptChange(updated);
+
+    success(`Tool calling mode set to: ${newMode}`);
     console.log();
     return;
   }
@@ -424,11 +488,9 @@ async function openSettings(config, trustConfig, onSystemPromptChange) {
 
   trustConfig[setting] = newLevel;
 
-  // Save to config
   config.trust = { ...trustConfig };
   saveConfig(config);
 
-  // Rebuild system prompt with new trust
   const updated = BASE_SYSTEM_PROMPT + buildToolsPrompt(trustConfig, config);
   onSystemPromptChange(updated);
 

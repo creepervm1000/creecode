@@ -1,4 +1,5 @@
 import { BaseProvider } from './base.js';
+import { buildNativeToolDefinitions } from '../tools/index.js';
 
 /**
  * OpenAI-compatible provider.
@@ -31,29 +32,94 @@ export class OpenAIProvider extends BaseProvider {
     return this.baseUrl.includes('openrouter.ai');
   }
 
+  supportsNativeToolCalling() {
+    return true;
+  }
+
+  shouldUseNativeToolCalling() {
+    return ['native', 'both'].includes(this.toolCallMode) && this.supportsNativeToolCalling();
+  }
+
+  buildPayload(messages, { stream = false } = {}) {
+    const payload = {
+      model: this.model,
+      messages,
+    };
+
+    if (stream && !this.shouldUseNativeToolCalling()) {
+      payload.stream = true;
+    }
+
+    if (this.shouldUseNativeToolCalling()) {
+      payload.tools = buildNativeToolDefinitions();
+      payload.tool_choice = 'auto';
+    }
+
+    return payload;
+  }
+
+  parseAssistantMessage(message = {}) {
+    const content = typeof message.content === 'string' ? message.content : '';
+    const nativeToolCalls = (message.tool_calls || [])
+      .filter(tc => tc?.type === 'function' && tc.function?.name)
+      .map(tc => {
+        let args = {};
+        const rawArgs = tc.function?.arguments || '{}';
+        try {
+          args = rawArgs ? JSON.parse(rawArgs) : {};
+        } catch {
+          args = { _raw: rawArgs };
+        }
+        return {
+          id: tc.id,
+          name: tc.function.name,
+          args,
+        };
+      });
+
+    return {
+      content,
+      nativeToolCalls,
+      assistantMessage: {
+        role: 'assistant',
+        content,
+        ...(message.tool_calls ? { tool_calls: message.tool_calls } : {}),
+      },
+    };
+  }
+
   async chat(messages) {
     const res = await this.request(`${this.baseUrl}/chat/completions`, {
       method: 'POST',
       headers: this.buildHeaders(),
-      body: JSON.stringify({
-        model: this.model,
-        messages,
-      }),
+      body: JSON.stringify(this.buildPayload(messages)),
     });
 
     const data = await res.json();
-    return data.choices?.[0]?.message?.content || '';
+    const message = data.choices?.[0]?.message || {};
+    return this.shouldUseNativeToolCalling()
+      ? this.parseAssistantMessage(message)
+      : (message.content || '');
   }
 
   async streamChat(messages, onChunk) {
+    if (this.shouldUseNativeToolCalling()) {
+      const res = await this.request(`${this.baseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: this.buildHeaders(),
+        body: JSON.stringify(this.buildPayload(messages)),
+      });
+
+      const data = await res.json();
+      const parsed = this.parseAssistantMessage(data.choices?.[0]?.message || {});
+      if (parsed.content && onChunk) onChunk(parsed.content);
+      return parsed;
+    }
+
     const res = await this.fetchFn(`${this.baseUrl}/chat/completions`, {
       method: 'POST',
       headers: this.buildHeaders(),
-      body: JSON.stringify({
-        model: this.model,
-        messages,
-        stream: true,
-      }),
+      body: JSON.stringify(this.buildPayload(messages, { stream: true })),
     });
 
     if (!res.ok) {

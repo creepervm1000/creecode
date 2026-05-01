@@ -5,6 +5,12 @@ import { saveConfig } from './config.js';
 import { TRUST_LEVELS, TRUST_CATEGORIES } from './trust.js';
 import { banner, success, info, label } from './utils/logger.js';
 
+const TOOL_CALL_MODE_CHOICES = [
+  { name: 'XML Tags — model emits <tool_call> blocks', value: 'xml' },
+  { name: 'Native — use provider-native tool calling when supported', value: 'native' },
+  { name: 'Both — allow native tool calling and XML fallback', value: 'both' },
+];
+
 /**
  * Interactive first-run onboarding wizard.
  * Returns the completed config object.
@@ -138,6 +144,12 @@ export async function runOnboarding() {
     default: false,
   });
 
+  config.toolCallMode = await select({
+    message: 'Tool calling mode:',
+    choices: TOOL_CALL_MODE_CHOICES,
+    default: 'xml',
+  });
+
   // 7. Web UI
   config.webui = await confirm({
     message: 'Enable web UI by default?',
@@ -162,6 +174,7 @@ export async function runOnboarding() {
   label('Commands Trust', config.trust.commands);
   label('Files Trust', config.trust.files);
   label('Outside Workspace', config.allowOutsideWorkspace ? 'Allowed' : 'Blocked');
+  label('Tool Calling', config.toolCallMode);
   label('Web UI', config.webui ? `Enabled (port ${config.webuiPort || 3000})` : 'Disabled');
   console.log();
 

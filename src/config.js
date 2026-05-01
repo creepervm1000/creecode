@@ -16,6 +16,7 @@ export const DEFAULT_CONFIG = {
   maxTokens: 4096,
   topP: 1,
   systemPromptAppendix: '',
+  toolCallMode: 'xml',
 
   maxIterations: 25,
   historyMaxMessages: 200,

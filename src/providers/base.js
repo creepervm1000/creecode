@@ -7,6 +7,11 @@ export class BaseProvider {
     this.model = config.model || '';
     this.baseUrl = config.baseUrl || '';
     this.fetchFn = config.fetchFn || globalThis.fetch;
+    this.toolCallMode = config.toolCallMode || 'xml';
+  }
+
+  supportsNativeToolCalling() {
+    return false;
   }
 
   /**

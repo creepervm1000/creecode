@@ -60,6 +60,12 @@ export const TOOL_DEFINITIONS = [
     parameters: { thought: { type: 'string', required: true, description: 'Your reasoning' } } },
 ];
 
+const TOOL_CALL_MODE_DESCRIPTIONS = {
+  xml: 'Use XML-style <tool_call> blocks in model output.',
+  native: 'Use provider-native tool calling when supported; otherwise fall back to XML tool blocks.',
+  both: 'Allow either provider-native tool calling or XML <tool_call> blocks.',
+};
+
 function isToolEnabled(tool, config) {
   const disabled = config.disabledTools || [];
   if (disabled.includes(tool.name)) return false;
@@ -70,6 +76,7 @@ function isToolEnabled(tool, config) {
 
 export function buildToolsPrompt(trustConfig, config = {}) {
   const workspaceRoot = getWorkspaceRoot();
+  const toolCallMode = config.toolCallMode || 'xml';
   const workspaceNote = allowOutsideWorkspace(config)
     ? `Outside-workspace access is enabled. Prefer staying in ${workspaceRoot} unless the task clearly requires leaving it.`
     : `All file paths and command working directories must stay inside ${workspaceRoot}.`;
@@ -83,7 +90,17 @@ export function buildToolsPrompt(trustConfig, config = {}) {
     return '\nYou have no tool access. You can only provide text responses.';
   }
 
-  let prompt = `\n## Available Tools\n\nWorkspace root: ${workspaceRoot}\n${workspaceNote}\n\nYou can use tools by including a tool call block in your response. Use this exact format:\n\n<tool_call>\n{"name": "tool_name", "args": {"param1": "value1"}}\n</tool_call>\n\nYou may include multiple tool calls in one response. Always explain what you're doing before calling a tool.\n\n**CRITICAL — DO NOT HALLUCINATE TOOL RESULTS.** Never write a \`<tool_result>...</tool_result>\` block yourself. That tag is produced ONLY by the runtime, AFTER you emit a \`<tool_call>\` and the runtime actually runs the tool.\n\nAvailable tools:\n`;
+  let prompt = `\n## Available Tools\n\nWorkspace root: ${workspaceRoot}\n${workspaceNote}\nTool calling mode: ${toolCallMode} — ${TOOL_CALL_MODE_DESCRIPTIONS[toolCallMode] || TOOL_CALL_MODE_DESCRIPTIONS.xml}\n\n`;
+
+  if (toolCallMode === 'xml') {
+    prompt += `Use tools by including a tool call block in your response. Use this exact format:\n\n<tool_call>\n{"name": "tool_name", "args": {"param1": "value1"}}\n</tool_call>\n\n`;
+  } else if (toolCallMode === 'native') {
+    prompt += `If the provider supports native tool calling, call tools natively instead of printing fake results. If native tool calling is unavailable, fall back to this XML format:\n\n<tool_call>\n{"name": "tool_name", "args": {"param1": "value1"}}\n</tool_call>\n\n`;
+  } else {
+    prompt += `You may use either provider-native tool calling or this XML fallback format:\n\n<tool_call>\n{"name": "tool_name", "args": {"param1": "value1"}}\n</tool_call>\n\n`;
+  }
+
+  prompt += `You may include multiple tool calls in one response. Always explain what you're doing before calling a tool.\n\n**CRITICAL — DO NOT HALLUCINATE TOOL RESULTS.** Never write a \`<tool_result>...</tool_result>\` block yourself. That tag is produced ONLY by the runtime, AFTER you emit a tool call and the runtime actually runs the tool.\n\nAvailable tools:\n`;
 
   const byCat = {};
   for (const tool of availableTools) (byCat[tool.category] ||= []).push(tool);
@@ -105,17 +122,71 @@ export function buildToolsPrompt(trustConfig, config = {}) {
   return prompt;
 }
 
+export function buildNativeToolDefinitions() {
+  return TOOL_DEFINITIONS.map(tool => {
+    const properties = {};
+    const required = [];
+
+    for (const [name, param] of Object.entries(tool.parameters || {})) {
+      let type = param.type;
+      if (type === 'number') type = 'number';
+      else if (type === 'boolean') type = 'boolean';
+      else if (type === 'object') type = 'object';
+      else if (type === 'array') type = 'array';
+      else type = 'string';
+
+      properties[name] = {
+        type,
+        description: param.description,
+      };
+      if (param.required) required.push(name);
+    }
+
+    return {
+      type: 'function',
+      function: {
+        name: tool.name,
+        description: tool.description,
+        parameters: {
+          type: 'object',
+          properties,
+          additionalProperties: false,
+          ...(required.length > 0 ? { required } : {}),
+        },
+      },
+    };
+  });
+}
+
 export function parseToolCalls(response) {
   const toolCallRegex = /<tool_call>\s*([\s\S]*?)\s*<\/tool_call>/g;
+  const trailingToolCallRegex = /<tool_call>\s*([\s\S]*?)\s*$/;
   const toolResultRegex = /<tool_result(?:\s[^>]*)?>[\s\S]*?<\/tool_result>/g;
   const toolCalls = [];
   let match;
   while ((match = toolCallRegex.exec(response)) !== null) {
     try { toolCalls.push(JSON.parse(match[1])); } catch { /* skip */ }
   }
+  let trailingToolCallText = null;
+  if (toolCalls.length === 0) {
+    const trailingMatch = response.match(trailingToolCallRegex);
+    if (trailingMatch) {
+      try {
+        const parsed = JSON.parse(trailingMatch[1]);
+        toolCalls.push(parsed);
+        trailingToolCallText = trailingMatch[0];
+      } catch {
+        // Ignore incomplete or malformed trailing tool calls.
+      }
+    }
+  }
   const hallucinatedToolResult = toolResultRegex.test(response);
   toolResultRegex.lastIndex = 0;
-  const text = response.replace(toolCallRegex, '').replace(toolResultRegex, '').trim();
+  const text = response
+    .replace(toolCallRegex, '')
+    .replace(toolResultRegex, '')
+    .replace(trailingToolCallText || '', '')
+    .trim();
   return { text, toolCalls, hallucinatedToolResult };
 }
 

@@ -123,5 +123,6 @@ export function createProvider(config) {
     model: config.model || providerDef.defaultModel,
     baseUrl: config.baseUrl || providerDef.baseUrl,
     fetchFn: config.fetchFn || globalThis.fetch,
+    toolCallMode: config.toolCallMode || 'xml',
   });
 }
