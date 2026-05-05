@@ -18,7 +18,7 @@ export const TOOL_DEFINITIONS = [
   { name: 'write_file', description: 'Create or overwrite a file', category: 'files', handler: writeFile,
     parameters: { path: { type: 'string', description: 'Path', required: true }, content: { type: 'string', description: 'Full content', required: true } } },
   { name: 'edit_file', description: 'Find/replace exact text in a file', category: 'files', handler: editFile,
-    parameters: { path: { type: 'string', required: true, description: 'Path' }, old_text: { type: 'string', required: true, description: 'Exact text to replace' }, new_text: { type: 'string', required: true, description: 'Replacement' } } },
+    parameters: { path: { type: 'string', required: true, description: 'Path' }, old_text: { type: 'string', required: true, description: 'Exact text to replace (must be unique unless replace_all=true)' }, new_text: { type: 'string', required: true, description: 'Replacement' }, replace_all: { type: 'boolean', required: false, description: 'Replace every occurrence instead of erroring when ambiguous' } } },
   { name: 'apply_patch', description: 'Apply a unified diff patch to a file', category: 'files', handler: applyPatch,
     parameters: { path: { type: 'string', required: true, description: 'Path' }, diff: { type: 'string', required: true, description: 'Unified diff body' } } },
   { name: 'list_directory', description: 'List files and folders in a directory', category: 'files', handler: listDirectory,

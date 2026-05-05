@@ -66,15 +66,39 @@ export async function editFile(args, trustLevel, policy = {}) {
     if (!existsSync(filePath)) {
       return { error: `File not found: ${filePath}` };
     }
-    let content = readFileSync(filePath, 'utf-8');
-    if (!content.includes(args.old_text)) {
-      return { error: 'Target text not found in file. Make sure old_text matches exactly.' };
+    const original = readFileSync(filePath, 'utf-8');
+    if (args.old_text === args.new_text) {
+      return { error: 'old_text and new_text are identical — no edit to apply.' };
     }
-    content = content.replace(args.old_text, args.new_text);
+    if (!original.includes(args.old_text)) {
+      return {
+        error: 'Target text not found in file. old_text must match exactly (including whitespace and indentation).',
+        hint: 'Tip: read the file first, copy a UNIQUE snippet of 3–10 lines including surrounding context, and pass it verbatim.',
+      };
+    }
+    // Count occurrences so we never silently edit the wrong one.
+    let occurrences = 0;
+    let searchIdx = 0;
+    while (true) {
+      const hit = original.indexOf(args.old_text, searchIdx);
+      if (hit === -1) break;
+      occurrences++;
+      searchIdx = hit + Math.max(1, args.old_text.length);
+    }
+    if (occurrences > 1 && !args.replace_all) {
+      return {
+        error: `old_text matched ${occurrences} places. Add surrounding context to make it unique, or pass "replace_all": true to edit every occurrence.`,
+        occurrences,
+      };
+    }
+    const content = args.replace_all
+      ? original.split(args.old_text).join(args.new_text)
+      : original.replace(args.old_text, args.new_text);
     writeFileSync(filePath, content, 'utf-8');
     return {
       path: filePath,
       status: 'edited',
+      occurrences_replaced: args.replace_all ? occurrences : 1,
     };
   } catch (err) {
     return { error: `Failed to edit file: ${err.message}` };
