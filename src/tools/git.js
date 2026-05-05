@@ -4,13 +4,22 @@ import { getWorkspaceRoot } from '../workspace.js';
 
 function runGit(args, cwd, timeout = 15000) {
   return new Promise((resolve) => {
-    let stdout = '', stderr = '';
+    let stdout = '', stderr = '', settled = false;
     const child = spawn('git', args, { cwd, env: { ...process.env, PAGER: 'cat' } });
+    const killTimer = setTimeout(() => {
+      try { child.kill('SIGTERM'); } catch {}
+    }, timeout);
+    killTimer.unref();
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(killTimer);
+      resolve(result);
+    };
     child.stdout.on('data', d => stdout += d.toString());
     child.stderr.on('data', d => stderr += d.toString());
-    child.on('close', code => resolve({ code, stdout, stderr }));
-    child.on('error', e => resolve({ code: -1, stdout: '', stderr: e.message }));
-    setTimeout(() => child.kill('SIGTERM'), timeout);
+    child.on('close', code => finish({ code, stdout, stderr }));
+    child.on('error', e => finish({ code: -1, stdout: '', stderr: e.message }));
   });
 }
 
