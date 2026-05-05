@@ -89,3 +89,35 @@ node bin/creecode.js --webui --port 3000
 ```
 
 Then open http://localhost:3000 in your browser.
+
+## Configuration
+
+The configuration file is stored at `~/.creecode/config.json` and contains:
+
+- `provider` — The default LLM provider
+- `model` — Default model name
+- `apiKey` — Provider API key (keep private)
+- `baseUrl` — Optional custom endpoint
+- `proxy` — Optional HTTP / SOCKS proxy URL
+- `trust` — Trust levels for `commands` and `files` (`prompt`, `safe`, `all`)
+- `allowOutsideWorkspace` — Whether tools may touch paths outside the launch directory
+- `useWebui` — Whether to launch the web UI by default
+
+You can edit this file by hand or re-run `node bin/creecode.js --setup`.
+
+## Conversation History
+
+Per-project conversation history is stored in `.creecode/conversation.json` inside the workspace.
+Delete the file to start a fresh session.
+
+## Troubleshooting
+
+- **`Permission denied` for a tool call** — raise the trust level in setup, or run with
+  `--allow-outside-workspace` if the path is outside your workspace.
+- **`429` from the provider** — your API key is rate-limited; try again later or switch provider
+  with `--provider`.
+- **Web UI shows a blank page** — clear the browser cache and confirm the port is not blocked.
+
+## License
+
+See the upstream repository for license details.
