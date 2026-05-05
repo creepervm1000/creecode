@@ -16,3 +16,21 @@ pnpm-debug.log*
 # OS/editor noise
 .DS_Store
 Thumbs.db
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# CreeCode local state
+.creecode/
+
+# Build output
+dist/
+out/
+*.tgz
