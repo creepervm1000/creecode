@@ -4,10 +4,19 @@ import { getWorkspaceRoot, resolveWorkspacePath } from '../workspace.js';
 
 /**
  * Shell command execution tool.
+ * Cross-platform (Linux/macOS/Windows).
  */
 
+const IS_WIN = process.platform === 'win32';
+
 // Commands generally considered safe (read-only)
-const SAFE_COMMANDS = [
+const SAFE_COMMANDS = IS_WIN ? [
+  'dir', 'type', 'findstr', 'where', 'echo', 'cd', 'date', 'time',
+  'ver', 'systeminfo', 'set',
+  'node --version', 'npm --version', 'git status', 'git log', 'git diff',
+  'git branch', 'python --version', 'python3 --version', 'cargo --version',
+  'go version', 'rustc --version', 'java --version',
+] : [
   'ls', 'cat', 'head', 'tail', 'wc', 'grep', 'find', 'which', 'echo',
   'pwd', 'whoami', 'date', 'uname', 'env', 'printenv', 'file', 'stat',
   'du', 'df', 'tree', 'diff', 'sort', 'uniq', 'tr', 'cut', 'awk', 'sed',
@@ -51,17 +60,21 @@ export async function runCommand(args, trustLevel, policy = {}) {
     let killed = false;
     let settled = false;
 
-    const child = spawn('bash', ['-c', command], {
-      cwd,
-      env: { ...process.env, PAGER: 'cat' },
-    });
+    const child = IS_WIN
+      ? spawn('cmd', ['/c', command], { cwd, env: { ...process.env, PAGER: 'cat' }, windowsHide: true })
+      : spawn('bash', ['-c', command], { cwd, env: { ...process.env, PAGER: 'cat' } });
 
     const killTimer = setTimeout(() => {
       if (!child.killed) {
         killed = true;
-        try { child.kill('SIGTERM'); } catch { /* ignore */ }
-        // Escalate to SIGKILL if still alive after 2s
-        setTimeout(() => { try { child.kill('SIGKILL'); } catch {} }, 2000).unref();
+        try {
+          if (IS_WIN) {
+            child.kill('SIGTERM');
+          } else {
+            child.kill('SIGTERM');
+            setTimeout(() => { try { child.kill('SIGKILL'); } catch {} }, 2000).unref();
+          }
+        } catch { /* ignore */ }
       }
     }, timeout);
     killTimer.unref();
