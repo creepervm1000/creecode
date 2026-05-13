@@ -1,12 +1,38 @@
-import { spawn } from 'node:child_process';
+import { spawn, execSync } from 'node:child_process';
 import { checkTrust } from '../trust.js';
+
+const IS_WIN = process.platform === 'win32';
 
 export async function listProcesses(args, trustLevel) {
   const allowed = await checkTrust('process', trustLevel, 'List processes', true);
   if (!allowed) return { error: 'Permission denied' };
+
+  if (IS_WIN) {
+    // Windows: use tasklist
+    return new Promise((resolve) => {
+      let out = '', settled = false;
+      const child = spawn('tasklist', ['/V', '/FO', 'CSV']);
+      const killTimer = setTimeout(() => { try { child.kill('SIGTERM'); } catch {} }, 10000);
+      killTimer.unref();
+      child.stdout.on('data', d => out += d.toString());
+      child.on('close', () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(killTimer);
+        resolve({ output: out.slice(0, 20000) });
+      });
+      child.on('error', e => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(killTimer);
+        resolve({ error: e.message });
+      });
+    });
+  }
+
+  // Linux/macOS: use ps
   return new Promise((resolve) => {
     let out = '', settled = false;
-    // Try GNU ps first, fall back to BSD ps (macOS) if the format string is rejected.
     const tryRun = (fmtArgs, onReject) => {
       const child = spawn('ps', fmtArgs);
       const killTimer = setTimeout(() => { try { child.kill('SIGTERM'); } catch {} }, 10000);
