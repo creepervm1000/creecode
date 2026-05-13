@@ -41,9 +41,18 @@ export class OpenAIProvider extends BaseProvider {
   }
 
   buildPayload(messages, { stream = false } = {}) {
+    // Strip empty tool_calls from stored messages (some providers reject [])
+    const clean = messages.map(m => {
+      if (m.tool_calls && Array.isArray(m.tool_calls) && m.tool_calls.length === 0) {
+        const { tool_calls, ...rest } = m;
+        return rest;
+      }
+      return m;
+    });
+
     const payload = {
       model: this.model,
-      messages,
+      messages: clean,
     };
 
     if (stream && !this.shouldUseNativeToolCalling()) {

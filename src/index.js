@@ -10,6 +10,14 @@ import { banner, error, info, success, warn } from './utils/logger.js';
  * Main application orchestrator.
  */
 export async function run(cliOptions = {}) {
+  // Restore terminal raw mode on exit (fixes CMD corruption)
+  const stdin = process.stdin;
+  const restoreRaw = () => {
+    try { if (stdin.isTTY && typeof stdin.setRawMode === 'function') stdin.setRawMode(false); } catch {}
+  };
+  process.on('exit', restoreRaw);
+  // On Windows, SIGINT doesn't reliably fire. Hook process.stdin close.
+  process.stdin.on('close', restoreRaw);
   // Re-run setup if requested
   if (cliOptions.setup) {
     const config = await runOnboarding();
