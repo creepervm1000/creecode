@@ -3,15 +3,109 @@ import chalk from 'chalk';
 import { getProviderChoices, PROVIDERS } from './providers/index.js';
 import { saveConfig } from './config.js';
 import { TRUST_LEVELS, TRUST_CATEGORIES } from './trust.js';
-import { banner, success, info, label } from './utils/logger.js';
+import { banner, success, info, warn, label, error } from './utils/logger.js';
 
-const TOOL_CALL_MODE_CHOICES = [
-  { name: 'XML Tags — model emits <tool_call> blocks', value: 'xml' },
-  { name: 'Native — use provider-native tool calling when supported', value: 'native' },
-  { name: 'Both — allow native tool calling and XML fallback', value: 'both' },
-];
+/**
+ * Fetch models from any OpenAI-compatible /v1/models endpoint.
+ */
+export async function listOpenAIModels(baseUrl, apiKey) {
+  try {
+    const url = `${baseUrl.replace(/\/+$/, '')}/models`;
+    const headers = { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' };
+    const res = await fetch(url, { headers, signal: AbortSignal.timeout(10000) });
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (data?.data && Array.isArray(data.data)) {
+      return data.data.map(m => m.id || m.name).filter(Boolean);
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * List models from the configured provider and print them.
+ */
+export async function listModels(config) {
+  const providerDef = PROVIDERS[config.provider];
+  if (!providerDef) {
+    error(`Unknown provider: ${config.provider}`);
+    process.exit(1);
+  }
+
+  const baseUrl = (config.baseUrl || providerDef.baseUrl || '').replace(/\/+$/, '');
+  console.log(`\n${chalk.bold('Provider:')} ${providerDef.name}`);
+  console.log(`${chalk.bold('Base URL:')} ${baseUrl}\n`);
+
+  if (config.provider === 'ollama') {
+    try {
+      const res = await fetch(`${baseUrl}/api/tags`);
+      const data = await res.json();
+      const models = (data.models || []).map(m => m.name);
+      if (models.length === 0) {
+        console.log('No models found.');
+        return;
+      }
+      models.forEach(m => console.log(`  ${m}`));
+    } catch (err) {
+      error(`Failed to fetch Ollama models: ${err.message}`);
+    }
+    return;
+  }
+
+  if (config.provider === 'gemini' && providerDef.class?.prototype?.listModels) {
+    try {
+      const provider = new providerDef.class({
+        apiKey: config.apiKey || '',
+        baseUrl,
+        fetchFn: globalThis.fetch,
+      });
+      const models = await provider.listModels();
+      if (models.length === 0) {
+        console.log('No models found.');
+        return;
+      }
+      models.forEach(m => console.log(`  ${m}`));
+    } catch (err) {
+      error(`Failed to fetch Gemini models: ${err.message}`);
+    }
+    return;
+  }
+
+  // Default: try OpenAI-compatible /v1/models
+  if (config.apiKey) {
+    const models = await listOpenAIModels(baseUrl, config.apiKey);
+    if (models && models.length > 0) {
+      models.forEach(m => console.log(`  ${m}`));
+      return;
+    }
+  }
+
+  error('Could not fetch model list. Check your API key and base URL.');
+}
 
 async function chooseModelFromProvider(provider, providerDef, config) {
+  const baseUrl = (config.baseUrl || providerDef.baseUrl || '').replace(/\/+$/, '');
+
+  // Try OpenAI-compatible /v1/models listing for all providers with an API key
+  if (providerDef.needsKey && config.apiKey && providerDef.class?.name !== 'GeminiProvider') {
+    info(`Fetching available models from ${baseUrl}...`);
+    const models = await listOpenAIModels(baseUrl, config.apiKey);
+    if (models && models.length > 0) {
+      try {
+        return await select({
+          message: 'Select a model:',
+          choices: models.map(m => ({ name: m, value: m })),
+          default: models.includes(config.model) ? config.model : undefined,
+        });
+      } catch {
+        // fall through
+      }
+    }
+    warn('Could not fetch model list. You can enter a model name manually.');
+  }
+
   if (provider === 'ollama') {
     info('Checking for available Ollama models...');
     try {
