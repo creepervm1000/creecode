@@ -64,6 +64,13 @@ export const PROVIDERS = {
     defaultModel: 'kilo-auto/free',
     needsKey: true,
   },
+  opencode: {
+    name: 'OpenCode Zen',
+    class: OpenAIProvider,
+    baseUrl: 'https://opencode.ai/zen/v1',
+    defaultModel: 'zen-v1',
+    needsKey: true,
+  },
   ollama: {
     name: 'Ollama (Local)',
     class: OllamaProvider,
