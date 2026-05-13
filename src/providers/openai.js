@@ -83,7 +83,7 @@ export class OpenAIProvider extends BaseProvider {
       assistantMessage: {
         role: 'assistant',
         content,
-        ...(message.tool_calls ? { tool_calls: message.tool_calls } : {}),
+        ...(message.tool_calls?.length ? { tool_calls: message.tool_calls } : {}),
       },
     };
   }
