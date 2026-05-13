@@ -18,6 +18,7 @@ program
   .option('--allow-outside-workspace', 'Allow file tools and command cwd outside the workspace root')
   .option('--webui', 'Launch the web UI instead of CLI chat')
   .option('--port <number>', 'Web UI port (default: 3000)', parseInt)
+  .option('--models', 'List available models from the configured provider and exit')
   .action(async (options) => {
     try {
       await run({

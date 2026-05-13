@@ -1,5 +1,5 @@
 import { loadConfig, configExists, mergeConfig } from './config.js';
-import { runOnboarding } from './onboarding.js';
+import { runOnboarding, listModels } from './onboarding.js';
 import { createProvider, PROVIDERS } from './providers/index.js';
 import { createProxyFetch } from './proxy.js';
 import { startChat } from './chat.js';
@@ -16,6 +16,17 @@ export async function run(cliOptions = {}) {
     if (!config.provider) process.exit(0);
     // Continue to chat with the new config
     return startSession(config, cliOptions);
+  }
+
+  // List models and exit
+  if (cliOptions.models) {
+    const cfg = configExists() ? loadConfig() : null;
+    if (!cfg || !cfg.provider) {
+      error('No provider configured. Run: creecode --setup');
+      process.exit(1);
+    }
+    await listModels(cfg);
+    return;
   }
 
   // First run → onboarding
