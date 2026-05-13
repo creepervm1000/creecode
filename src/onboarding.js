@@ -85,6 +85,12 @@ export async function listModels(config) {
   error('Could not fetch model list. Check your API key and base URL.');
 }
 
+const TOOL_CALL_MODE_CHOICES = [
+  { name: 'XML Tags — model emits <tool_call> blocks', value: 'xml' },
+  { name: 'Native — use provider-native tool calling when supported', value: 'native' },
+  { name: 'Both — allow native tool calling and XML fallback', value: 'both' },
+];
+
 async function chooseModelFromProvider(provider, providerDef, config) {
   const baseUrl = (config.baseUrl || providerDef.baseUrl || '').replace(/\/+$/, '');
 
