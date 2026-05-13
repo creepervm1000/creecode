@@ -5,17 +5,19 @@ import { createProxyFetch } from './proxy.js';
 import { startChat } from './chat.js';
 import { startWebUI } from './webui/server.js';
 import { banner, error, info, success, warn } from './utils/logger.js';
-import { setRawMode } from './utils/terminal.js';
 
 /**
  * Main application orchestrator.
  */
 export async function run(cliOptions = {}) {
-  // Restore terminal raw mode on exit (fixes CMD corruption after Ctrl+C)
-  const restoreTerm = () => { try { setRawMode(false); } catch {} };
-  process.on('exit', restoreTerm);
-  process.on('SIGINT', () => { restoreTerm(); process.exit(0); });
-  process.on('SIGTERM', restoreTerm);
+  // Restore terminal raw mode on exit (fixes CMD corruption)
+  const stdin = process.stdin;
+  const restoreRaw = () => {
+    try { if (stdin.isTTY && typeof stdin.setRawMode === 'function') stdin.setRawMode(false); } catch {}
+  };
+  process.on('exit', restoreRaw);
+  // On Windows, SIGINT doesn't reliably fire. Hook process.stdin close.
+  process.stdin.on('close', restoreRaw);
   // Re-run setup if requested
   if (cliOptions.setup) {
     const config = await runOnboarding();
