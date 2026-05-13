@@ -30,6 +30,7 @@ program
         allowOutsideWorkspace: options.allowOutsideWorkspace,
         webui: options.webui,
         port: options.port,
+        models: options.models,
       });
     } catch (err) {
       console.error(`Fatal: ${err.message}`);
