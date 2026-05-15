@@ -10,7 +10,7 @@ import { TRUST_LEVELS, TRUST_CATEGORIES } from './trust.js';
 import { saveConfig, loadConfig } from './config.js';
 import { setRawMode } from './utils/terminal.js';
 import { createProvider, getProviderChoices, PROVIDERS } from './providers/index.js';
-import { showSidebar, canShowSidebar, loadTodos, MIN_WIDTH } from './utils/sidebar.js';
+import { showSidebar, clearSidebar, canShowSidebar, loadTodos, MIN_WIDTH } from './utils/sidebar.js';
 
 const HISTORY_DIR = join(process.cwd(), '.creecode');
 const HISTORY_FILE = join(HISTORY_DIR, 'conversation.json');
@@ -334,6 +334,7 @@ export async function startChat(provider, config) {
     showSidebar(config);
 
     rl.on('close', () => {
+      clearSidebar();
       if (!isClosing) {
         console.log();
       }
