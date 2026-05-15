@@ -10,6 +10,7 @@ import { TRUST_LEVELS, TRUST_CATEGORIES } from './trust.js';
 import { saveConfig, loadConfig } from './config.js';
 import { setRawMode } from './utils/terminal.js';
 import { createProvider, getProviderChoices, PROVIDERS } from './providers/index.js';
+import { showSidebar, canShowSidebar, loadTodos, MIN_WIDTH } from './utils/sidebar.js';
 
 const HISTORY_DIR = join(process.cwd(), '.creecode');
 const HISTORY_FILE = join(HISTORY_DIR, 'conversation.json');
@@ -77,6 +78,7 @@ const COMMANDS = {
   '/config': 'Show current configuration',
   '/settings': 'Open settings (trust levels, etc.)',
   '/system': 'Set a custom system prompt',
+  '/tasks': 'Show task sidebar',
   '/exit': 'Exit CreeCode',
 };
 
@@ -257,10 +259,26 @@ export async function startChat(provider, config) {
     console.log(chalk.cyan.bold('\n  CreeCode'));
     dim(`  Provider: ${config.provider} | Model: ${config.model || 'default'}`);
     dim(`  Trust — Commands: ${trustConfig.commands} | Files: ${trustConfig.files}`);
+    if (process.stdout.columns >= MIN_WIDTH) {
+      dim('  Task sidebar: auto-shown when terminal is wide enough (100+ cols)');
+    }
     dim('  Type /help for commands, /exit to quit.\n');
 
     let isHandlingLine = false;
-    rl.setPrompt(chalk.green('❯ '));
+
+    // build dynamic prompt with task count
+    function buildPrompt() {
+      const todos = loadTodos(config);
+      const pending = todos.filter(t => !t.done).length;
+      if (pending > 0) {
+        rl.setPrompt(chalk.green('❯ ') + chalk.cyan(`[${pending} task${pending > 1 ? 's' : ''}] `));
+      } else {
+        rl.setPrompt(chalk.green('❯ '));
+      }
+    }
+
+    buildPrompt();
+    rl.prompt();
 
     rl.on('line', async (userInput) => {
       if (isClosing || isHandlingLine) return;
@@ -287,6 +305,7 @@ export async function startChat(provider, config) {
 
         messages.push({ role: 'user', content: trimmed });
         await agentLoop(provider, messages, config, trustConfig);
+        showSidebar(config);
       } catch (err) {
         warn(`Input loop error: ${err.message}`);
       } finally {
@@ -294,13 +313,25 @@ export async function startChat(provider, config) {
         if (!isClosing) {
           rl.resume();
           setRawMode(true);
+          buildPrompt();
           rl.prompt();
         }
       }
     });
 
+    // refresh sidebar on terminal resize
+    process.stdout.on('resize', () => {
+      if (!isHandlingLine && !isClosing) {
+        buildPrompt();
+        showSidebar(config);
+        rl.prompt();
+      }
+    });
+
     setRawMode(true);
+    buildPrompt();
     rl.prompt();
+    showSidebar(config);
 
     rl.on('close', () => {
       if (!isClosing) {
@@ -548,6 +579,10 @@ async function handleCommand(input, messages, config, provider, rl, trustConfig,
       console.log();
       break;
 
+    case '/tasks':
+      showTasksPanel(config);
+      break;
+
     case '/settings':
       await openSettings(config, provider, trustConfig, onProviderChange, onSystemPromptChange);
       break;
@@ -695,5 +730,44 @@ async function openSettings(config, provider, trustConfig, onProviderChange, onS
   onSystemPromptChange(updated);
 
   success(`${TRUST_CATEGORIES[setting]} trust set to: ${newLevel}`);
+  console.log();
+}
+
+/**
+ * Display full task list as a panel in the terminal.
+ */
+function showTasksPanel(config) {
+  const todos = loadTodos(config);
+  const pending = todos.filter(t => !t.done);
+  const done = todos.filter(t => t.done);
+
+  console.log(chalk.white.bold('\n  Tasks\n'));
+  console.log(chalk.gray('  ' + '\u2500'.repeat(40)));
+
+  if (pending.length === 0 && done.length === 0) {
+    dim('  No tasks yet. Use add_todo tool or /tasks to check.');
+    console.log();
+    return;
+  }
+
+  if (pending.length > 0) {
+    console.log(chalk.cyan(`  Pending (${pending.length})\n`));
+    for (const t of pending) {
+      const pColor = t.priority === 'high' ? chalk.red : t.priority === 'medium' ? chalk.yellow : chalk.gray;
+      const pTag = t.priority ? ` ${pColor(`[${t.priority}]`)}` : '';
+      const tag = t.tag ? chalk.magenta(` #${t.tag}`) : '';
+      console.log(`  ${chalk.gray('\u25cb')} ${t.text}${pTag}${tag}`);
+    }
+  }
+
+  if (done.length > 0) {
+    console.log(chalk.green(`\n  Done (${done.length})\n`));
+    for (const t of done) {
+      console.log(`  ${chalk.green('\u2713')} ${chalk.gray.dim(t.text)}`);
+    }
+  }
+
+  console.log(chalk.gray('  ' + '\u2500'.repeat(40)));
+  console.log(chalk.gray(`  Total: ${todos.length} | Pending: ${pending.length} | Done: ${done.length}`));
   console.log();
 }
