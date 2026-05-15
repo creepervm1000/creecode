@@ -9,6 +9,7 @@ import { applyPatch } from './patch.js';
 import { addNote, listNotes, clearNotes } from './notes.js';
 import { jsonQuery } from './json_tool.js';
 import { think } from './think.js';
+import { addTodo, listTodos, updateTodo, deleteTodo, clearTodos } from './todo.js';
 import { getEnv } from './env.js';
 import { allowOutsideWorkspace, getWorkspaceRoot } from '../workspace.js';
 
@@ -56,6 +57,16 @@ export const TOOL_DEFINITIONS = [
     parameters: { text: { type: 'string', required: true, description: 'Note text' }, tag: { type: 'string', required: false, description: 'Optional tag' } } },
   { name: 'list_notes', description: 'List all saved notes', category: 'notes', handler: listNotes, parameters: {} },
   { name: 'clear_notes', description: 'Clear all notes', category: 'notes', handler: clearNotes, parameters: {} },
+  { name: 'add_todo', description: 'Add a todo item to .creecode/todo.json', category: 'notes', handler: addTodo,
+    parameters: { text: { type: 'string', required: true, description: 'Task description' }, priority: { type: 'string', required: false, description: 'Optional priority (e.g. high, medium, low)' }, tag: { type: 'string', required: false, description: 'Optional tag for grouping' }, insert_before_id: { type: 'number', required: false, description: 'Insert before this todo id' }, insert_after_id: { type: 'number', required: false, description: 'Insert after this todo id' } } },
+  { name: 'list_todos', description: 'List todo items (filter by status or tag)', category: 'notes', handler: listTodos,
+    parameters: { filter: { type: 'string', required: false, description: '"all", "pending", or "done" (default: all)' }, tag: { type: 'string', required: false, description: 'Filter by tag' } } },
+  { name: 'update_todo', description: 'Update a todo (mark done, change text/priority/tag)', category: 'notes', handler: updateTodo,
+    parameters: { id: { type: 'number', required: true, description: 'Todo id' }, done: { type: 'boolean', required: false, description: 'Mark as done or undone' }, text: { type: 'string', required: false, description: 'New text' }, priority: { type: 'string', required: false, description: 'New priority' }, tag: { type: 'string', required: false, description: 'New tag' } } },
+  { name: 'delete_todo', description: 'Delete a single todo item', category: 'notes', handler: deleteTodo,
+    parameters: { id: { type: 'number', required: true, description: 'Todo id' } } },
+  { name: 'clear_todos', description: 'Clear todos (all, or only completed)', category: 'notes', handler: clearTodos,
+    parameters: { filter: { type: 'string', required: false, description: '"all" or "done" (default: all)' } } },
   { name: 'think', description: 'Private scratchpad — use to plan without calling a real tool', category: 'meta', handler: think,
     parameters: { thought: { type: 'string', required: true, description: 'Your reasoning' } } },
 ];
