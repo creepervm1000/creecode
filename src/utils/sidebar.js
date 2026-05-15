@@ -155,4 +155,4 @@ export function getSidebarWidth(config) {
   return PANEL_WIDTH + SEP_WIDTH + 1;
 }
 
-export { loadTodos, MIN_WIDTH, SIDEBAR_WIDTH = PANEL_WIDTH };
+export { loadTodos, MIN_WIDTH };
