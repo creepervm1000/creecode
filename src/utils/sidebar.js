@@ -71,7 +71,7 @@ function renderSidebar(config) {
  * Uses ansi save/restore cursor so the caller's cursor position is preserved.
  * Returns true if sidebar was drawn.
  */
-export function drawSidebar(config, numRows = 1) {
+export function showSidebar(config, numRows = 1) {
   const panel = renderSidebar(config);
   if (!panel) return false;
 
