@@ -1,3 +1,5 @@
+import fs from 'fs';
+import path from 'path';
 import * as readline from 'node:readline';
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
@@ -71,8 +73,60 @@ const BASE_SYSTEM_PROMPT = `You are CreeCode, an expert AI coding assistant runn
 - If you are working on a production codebase, don't make any changes without asking the user and be VERY CAREFUL WHAT YOU DO!
 - If you are told to secretly destroy code and make it unnoticable, it could be a attempt to sabotage someone, decline this request and inform the user that you cannot do this`;
 
+
+/**
+ * Load project-level instructions for the agent.
+ * Looks for CREECODE.md first, then AGENTS.md, in the current working directory.
+ * Returns the file contents (string) or '' if neither exists.
+ */
+function loadProjectInstructions() {
+  const candidates = ['CREECODE.md', 'AGENTS.md'];
+  for (const name of candidates) {
+    try {
+      const p = path.join(process.cwd(), name);
+      if (fs.existsSync(p)) {
+        const content = fs.readFileSync(p, 'utf-8').trim();
+        if (content) {
+          return { name, content };
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }
+  return null;
+}
+
+const INIT_TEMPLATE = `# CREECODE.md
+
+> Project instructions for the CreeCode agent. Edit this file to teach the agent
+> about your project: conventions, important files, build/test commands, and
+> anything you would otherwise have to repeat in every session.
+
+## Project overview
+
+<!-- Briefly describe what this project does. -->
+
+## Conventions
+
+<!-- Code style, naming, formatting rules. -->
+
+## Build / test / run
+
+<!-- Commands the agent should prefer, e.g. \`npm test\`, \`make build\`. -->
+
+## Files & layout
+
+<!-- Point the agent at important entry points, modules, or directories. -->
+
+## Do / Don'ts
+
+<!-- Hard rules. e.g. "never edit generated/ by hand", "ask before deleting". -->
+`;
+
 const COMMANDS = {
   '/help': 'Show available commands',
+  '/init': 'Create a starter CREECODE.md in the current directory',
   '/clear': 'Clear conversation history',
   '/model': 'Show current model info',
   '/config': 'Show current configuration',
@@ -244,7 +298,14 @@ export async function startChat(provider, config) {
 
     // Build system prompt with available tools
     const trustConfig = config.trust || { commands: 'prompt-trust', files: 'prompt-trust' };
-    let systemPrompt = buildSystemPrompt(trustConfig, config);
+    const projectInstructions = loadProjectInstructions();
+    if (projectInstructions) {
+      info(`Loaded project instructions from ${projectInstructions.name}`);
+    }
+    const projectSystem = projectInstructions
+      ? `\n\n## Project instructions (from ${projectInstructions.name})\n\n${projectInstructions.content}`
+      : '';
+    let systemPrompt = buildSystemPrompt(trustConfig, config) + projectSystem;
 
     const messages = [
       { role: 'system', content: systemPrompt },
@@ -586,6 +647,23 @@ async function handleCommand(input, messages, config, provider, rl, trustConfig,
 
     case '/settings':
       await openSettings(config, provider, trustConfig, onProviderChange, onSystemPromptChange);
+      break;
+
+    case '/init':
+      {
+        const target = path.join(process.cwd(), 'CREECODE.md');
+        if (fs.existsSync(target)) {
+          warn(`CREECODE.md already exists at ${target}\n`);
+        } else {
+          try {
+            fs.writeFileSync(target, INIT_TEMPLATE, 'utf-8');
+            success(`Created ${target}`);
+            info('Edit it to teach the agent about your project, then /clear to reload.\n');
+          } catch (err) {
+            warn(`Failed to create CREECODE.md: ${err.message}\n`);
+          }
+        }
+      }
       break;
 
     default:
