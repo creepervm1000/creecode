@@ -1,0 +1,49 @@
+name: Bundle & Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  bundle:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - run: npm ci
+      - run: npm run bundle
+
+      - name: Upload bundle artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: creecode-bundle
+          path: dist/creecode.mjs
+
+      - name: Create release with bundle
+        if: github.event_name == 'push'
+        env:
+          GITEA_TOKEN: ${{ secrets.GITEA_TOKEN }}
+        run: |
+          VERSION="v$(node -p "require('./package.json').version")-$(date +%Y%m%d%H%M%S)"
+          echo "Creating release $VERSION"
+
+          # Create the release
+          RELEASE_RESP=$(curl -s -X POST \
+            "${{ github.server_url }}/api/v1/repos/${{ github.repository }}/releases" \
+            -H "Authorization: token $GITEA_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "$(jq -n --arg tag "$VERSION" --arg name "Bundle $VERSION" \
+              '{tag_name: $tag, name: $name, body: "Automated bundle build from commit ${{ github.sha }}", draft: false, prerelease: true}')")
+          
+          echo "Release response: $RELEASE_RESP"
+          
+          # Upload the bundled file as release asset
+          curl -s -X POST \
+            "${{ github.server_url }}/api/v1/repos/${{ github.repository }}/releases?tag=$VERSION/assets" \
+            -H "Authorization: token $GITEA_TOKEN" \
+            -F "attachment=@dist/creecode.mjs"
