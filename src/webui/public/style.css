@@ -18,6 +18,8 @@
   --border: rgba(255, 255, 255, 0.06);
   --border-bright: rgba(255, 255, 255, 0.1);
   --danger: #ef4444;
+  --success: #22c55e;
+  --warning: #f59e0b;
   --radius: 12px;
   --radius-sm: 8px;
   --font: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
@@ -225,6 +227,105 @@ main::-webkit-scrollbar-thumb {
   font-weight: 600;
 }
 
+/* ── Tool Calls ── */
+
+.tool-call {
+  margin: 8px 0;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-bright);
+  background: rgba(255, 255, 255, 0.02);
+  overflow: hidden;
+  animation: slideIn 0.2s ease-out;
+}
+
+@keyframes slideIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.tool-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  background: rgba(255, 255, 255, 0.02);
+  border-bottom: 1px solid var(--border);
+}
+
+.tool-header strong {
+  color: var(--accent-hover);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.tool-status {
+  font-size: 11px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 1px 6px;
+  border-radius: 4px;
+}
+
+.tool-status.start {
+  color: var(--warning);
+  background: rgba(245, 158, 11, 0.1);
+}
+
+.tool-status.ok {
+  color: var(--success);
+  background: rgba(34, 197, 94, 0.1);
+}
+
+.tool-status.error {
+  color: var(--danger);
+  background: rgba(239, 68, 68, 0.1);
+}
+
+.tool-args,
+.tool-result {
+  padding: 8px 12px;
+}
+
+.tool-args pre,
+.tool-result pre {
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-muted);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.tool-result {
+  border-top: 1px solid var(--border);
+}
+
+.tool-result pre {
+  color: var(--text-secondary);
+}
+
+/* ── Notices ── */
+
+.notice {
+  margin: 8px 0;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  background: rgba(99, 102, 241, 0.08);
+  border-left: 3px solid var(--accent);
+  font-size: 13px;
+  color: var(--text-secondary);
+  font-style: italic;
+}
+
+/* ── Typing ── */
+
 .typing {
   color: var(--text-muted);
   font-style: italic;
@@ -235,6 +336,8 @@ main::-webkit-scrollbar-thumb {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.4; }
 }
+
+/* ── Errors ── */
 
 .error {
   color: var(--danger);

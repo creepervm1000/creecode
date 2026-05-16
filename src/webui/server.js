@@ -62,6 +62,17 @@ function shouldInjectWorkspaceCorrection(messages, toolCalls, assistantText) {
   return isUnnecessaryContextRequest(assistantText) || isStallingInspectionPromise(assistantText);
 }
 
+/**
+ * Strip tool_call XML from text so it never reaches the browser.
+ */
+function stripToolCallXml(text) {
+  if (!text) return text;
+  return text
+    .replace(/<tool_call[^>]*>[\s\S]*?<\/tool_call>/gi, '')
+    .replace(/<tool_result[^>]*>[\s\S]*?<\/tool_result>/gi, '')
+    .trim();
+}
+
 export async function startWebUI(provider, config, port = 3000) {
   return new Promise((resolve, reject) => {
     const app = express();
@@ -92,10 +103,12 @@ export async function startWebUI(provider, config, port = 3000) {
           iteration++;
           let fullResponse = '';
           let rawResponse = '';
+
+          // Buffer the full response instead of streaming raw chunks
           try {
             rawResponse = await provider.streamChat(messages, (chunk) => {
               fullResponse ||= '';
-              send({ chunk });
+              // Don't stream chunks to client — buffer to strip tool call XML
             });
             const normalized = normalizeAssistantResponse(rawResponse);
             fullResponse = normalized.text;
@@ -103,7 +116,6 @@ export async function startWebUI(provider, config, port = 3000) {
               rawResponse = await provider.chat(messages);
               const chatNormalized = normalizeAssistantResponse(rawResponse);
               fullResponse = chatNormalized.text;
-              send({ chunk: fullResponse });
             }
           } catch (err) {
             if (messages.length > baselineLen) messages.length = baselineLen;
@@ -120,10 +132,10 @@ export async function startWebUI(provider, config, port = 3000) {
           messages.push(normalized.assistantMessage);
 
           if (hallucinatedToolResult && toolCalls.length === 0) {
-            send({ notice: 'Model hallucinated a <tool_result> block. Injecting correction.' });
+            send({ notice: 'Model hallucinated a tool_result. Injecting correction.' });
             messages.push({
               role: 'user',
-              content: 'You wrote a <tool_result> block yourself. That tag is produced ONLY by the runtime, after you emit a <tool_call> and the runtime actually runs the tool. No tool was actually run. If you want to use a tool, emit <tool_call>...</tool_call> and STOP — wait for the real <tool_result> in the next message.',
+              content: 'You wrote a <tool_result> block yourself. That tag is produced ONLY by the runtime, after you emit a ⛃ and the runtime actually runs the tool. No tool was actually run. If you want to use a tool, emit ⛃...⤴ and STOP — wait for the real <tool_result> in the next message.',
             });
             continue;
           }
@@ -137,11 +149,24 @@ export async function startWebUI(provider, config, port = 3000) {
             continue;
           }
 
+          // Send clean text with tool call XML stripped
+          const cleanText = stripToolCallXml(fullResponse);
+
           if (toolCalls.length === 0) {
+            // Final response — no more tool calls
+            if (cleanText) {
+              send({ text: cleanText });
+            }
             send({ done: true });
             return res.end();
           }
 
+          // Has tool calls — send clean text first, then tool events
+          if (cleanText) {
+            send({ text: cleanText });
+          }
+
+          // Execute tools and send events
           const results = [];
           for (const tc of toolCalls) {
             send({ tool: { name: tc.name, args: tc.args, status: 'start' } });

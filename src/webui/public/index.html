@@ -127,37 +127,95 @@
             try {
               const data = JSON.parse(payload);
               if (data.error) {
-                contentEl.innerHTML = `<p class="error">Error: ${escapeHtml(data.error)}</p>`;
+                contentEl.innerHTML = '<p class="error">Error: ' + escapeHtml(data.error) + '</p>';
                 return;
               }
               if (data.done) continue;
+
+              // Tool execution event
+              if (data.tool) {
+                const toolEl = document.createElement('div');
+                toolEl.className = 'tool-call';
+                const isStart = data.tool.status === 'start';
+                const isError = data.tool.status === 'error';
+                const icon = isStart ? '\u2699' : (isError ? '\u2716' : '\u2714');
+                const argsStr = typeof data.tool.args === 'object' ? JSON.stringify(data.tool.args, null, 2) : String(data.tool.args || '');
+                const resultStr = data.tool.result !== undefined
+                  ? (typeof data.tool.result === 'string' ? data.tool.result : JSON.stringify(data.tool.result, null, 2))
+                  : '';
+                toolEl.innerHTML =
+                  '<div class="tool-header"><span>' + icon + '</span> <strong>' + escapeHtml(data.tool.name) + '</strong> <span class="tool-status ' + data.tool.status + '">' + data.tool.status + '</span></div>' +
+                  '<div class="tool-args"><pre>' + escapeHtml(argsStr) + '</pre></div>' +
+                  (!isStart && resultStr ? '<div class="tool-result"><pre>' + escapeHtml(resultStr) + '</pre></div>' : '');
+                contentEl.appendChild(toolEl);
+                chatMessages.scrollTop = chatMessages.scrollHeight;
+                continue;
+              }
+
+              // System notice
+              if (data.notice) {
+                const noticeEl = document.createElement('div');
+                noticeEl.className = 'notice';
+                noticeEl.textContent = data.notice;
+                contentEl.appendChild(noticeEl);
+                chatMessages.scrollTop = chatMessages.scrollHeight;
+                continue;
+              }
+
+              // Clean text event (full clean text per iteration)
+              if (data.text) {
+                fullText = data.text;
+                // Insert a text node before any tool elements
+                const tools = contentEl.querySelectorAll('.tool-call, .notice');
+                const textDiv = document.createElement('div');
+                textDiv.className = 'response-text';
+                textDiv.innerHTML = renderMarkdown(fullText);
+                if (tools.length > 0) {
+                  contentEl.insertBefore(textDiv, tools[0]);
+                } else {
+                  contentEl.appendChild(textDiv);
+                }
+                chatMessages.scrollTop = chatMessages.scrollHeight;
+                continue;
+              }
+
+              // Backwards compat: chunk event (raw streaming, strip tool calls as safety net)
               if (data.chunk) {
                 fullText += data.chunk;
-                contentEl.innerHTML = renderMarkdown(fullText);
+                const displayText = stripToolCalls(fullText);
+                contentEl.innerHTML = displayText
+                  ? renderMarkdown(displayText)
+                  : '<span class="typing">Executing tools...</span>';
                 chatMessages.scrollTop = chatMessages.scrollHeight;
               }
             } catch {}
           }
         }
       } catch (err) {
-        contentEl.innerHTML = `<p class="error">Connection error: ${escapeHtml(err.message)}</p>`;
+        contentEl.innerHTML = '<p class="error">Connection error: ' + escapeHtml(err.message) + '</p>';
       }
     });
 
     function appendMessage(role, content) {
       const div = document.createElement('div');
-      div.className = `message ${role}`;
-      div.innerHTML = `
-        <div class="message-avatar">${role === 'user' ? 'You' : 'CC'}</div>
-        <div class="message-content">${content ? renderMarkdown(content) : '<span class="typing">Thinking...</span>'}</div>
-      `;
+      div.className = 'message ' + role;
+      div.innerHTML =
+        '<div class="message-avatar">' + (role === 'user' ? 'You' : 'CC') + '</div>' +
+        '<div class="message-content">' + (content ? renderMarkdown(content) : '<span class="typing">Thinking...</span>') + '</div>';
       chatMessages.appendChild(div);
       chatMessages.scrollTop = chatMessages.scrollHeight;
       return div;
     }
 
     function escapeHtml(s) {
-      return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+      return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+
+    function stripToolCalls(text) {
+      return text
+        .replace(/<tool_call[^>]*>[\s\S]*?<\/tool_call>/gi, '')
+        .replace(/<tool_result[^>]*>[\s\S]*?<\/tool_result>/gi, '')
+        .trim();
     }
 
     function renderMarkdown(text) {
