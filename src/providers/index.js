@@ -12,7 +12,7 @@ export const PROVIDERS = {
     name: 'CreeCode Go',
     class: OpenAIProvider,
     baseUrl: 'https://creecodego.creepernet.qzz.io',
-    defaultModel: 'minimax-m2.5',
+    defaultModel: 'kilocode/minimax/minimax-m2.5',
     needsKey: true,
   },
   openai: {
