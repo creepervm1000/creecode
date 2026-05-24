@@ -11,7 +11,7 @@ export const PROVIDERS = {
   creecodego: {
     name: 'CreeCode Go',
     class: OpenAIProvider,
-    baseUrl: 'https://go.creeperai.qzz.io',
+    baseUrl: 'https://creecodego.creepernet.qzz.io',
     defaultModel: 'minimax-m2.5',
     needsKey: true,
   },
