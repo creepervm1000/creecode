@@ -8,6 +8,13 @@ import { HuggingFaceProvider } from './huggingface.js';
  * Provider registry — maps provider IDs to their class and default config.
  */
 export const PROVIDERS = {
+  creecodego: {
+    name: 'CreeCode Go',
+    class: OpenAIProvider,
+    baseUrl: 'https://go.creeperai.qzz.io',
+    defaultModel: 'minimax-m2.5',
+    needsKey: true,
+  },
   openai: {
     name: 'OpenAI',
     class: OpenAIProvider,
