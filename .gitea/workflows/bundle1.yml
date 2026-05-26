@@ -31,7 +31,7 @@ jobs:
         run: npm run bundle
 
       - name: upload artifact
-        uses: actions/upload-artifact@v4
+        uses: gitea/upload-artifact@v1
         with:
           name: build-output
           path: ./dist/
