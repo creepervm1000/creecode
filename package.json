@@ -4,10 +4,14 @@
   "description": "CLI coding assistant \u2014 supports 10+ LLM providers",
   "type": "module",
   "bin": {
-    "creecode": "./bin/creecode.js"
+    "creecode": "./bin/creecode.js",
+    "telegramo": "./bin/telegramo.js",
+    "discordo": "./bin/discordo.js"
   },
   "scripts": {
     "start": "node bin/creecode.js",
+    "telegram": "node bin/telegramo.js",
+    "discord": "node bin/discordo.js",
     "bundle": "node scripts/bundle.js"
   },
   "dependencies": {
@@ -16,7 +20,8 @@
     "commander": "^12.1.0",
     "express": "^4.21.0",
     "ora": "^8.1.0",
-    "undici": "^6.19.0"
+    "undici": "^6.19.0",
+    "discord.js": "^14.16.0"
   },
   "devDependencies": {
     "esbuild": "^0.24.0"

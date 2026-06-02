@@ -1,0 +1,28 @@
+{
+  "telegram": {
+    "token": "your telegram bot token here",
+    "allowedChats": [],
+    "listenAll": false
+  },
+  "provider": {
+    "name": "openai",
+    "apiKey": "",
+    "model": "",
+    "baseUrl": ""
+  },
+  "toolCallMode": "xml",
+  "trust": {
+    "files": "agent-decides-trust",
+    "commands": "prompt-trust",
+    "network": "prompt-trust",
+    "git": "prompt-trust",
+    "process": "prompt-trust",
+    "notes": "full-trust",
+    "meta": "full-trust"
+  },
+  "temperature": 0.2,
+  "maxTokens": 4096,
+  "allowOutsideWorkspace": false,
+  "disabledTools": [],
+  "systemPromptAppendix": ""
+}

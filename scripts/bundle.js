@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 
 /**
- * CreeCode Bundler — merges the entire project into a single executable JS file.
- * Uses esbuild to bundle all source files, then prepends the shebang.
- * 
- * Usage: node scripts/bundle.js [output]
- *   output: path for the bundled file (default: dist/creecode.mjs)
+ * CreeCode Bundler — merges the entire project into single executable JS files.
+ * Bundles creecode (CLI), telegramo (Telegram bot), and discordo (Discord bot).
+ *
+ * Usage: node scripts/bundle.js [output-name]
+ *   output-name: "creecode", "telegramo", or "discordo" to bundle just one
  */
 
 import { build } from 'esbuild';
@@ -17,12 +17,18 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const ROOT = join(__dirname, '..');
 
-const outFile = process.argv[2] || join(ROOT, 'dist', 'creecode.mjs');
+const ENTRIES = [
+  { entry: join(ROOT, 'bin', 'creecode.js'),  out: join(ROOT, 'dist', 'creecode.mjs') },
+  { entry: join(ROOT, 'bin', 'telegramo.js'), out: join(ROOT, 'dist', 'telegramo.mjs') },
+  { entry: join(ROOT, 'bin', 'discordo.js'),  out: join(ROOT, 'dist', 'discordo.mjs') },
+];
+
+const filter = process.argv[2];
 
 async function bundle() {
-  console.log('📦 Bundling CreeCode...\n');
+  console.log('bundling creecode...\n');
 
-  const outDir = dirname(outFile);
+  const outDir = join(ROOT, 'dist');
   mkdirSync(outDir, { recursive: true });
 
   // Copy web UI static files into dist
@@ -30,70 +36,68 @@ async function bundle() {
   const publicDest = join(outDir, 'public');
   if (existsSync(publicSrc)) {
     cpSync(publicSrc, publicDest, { recursive: true });
-    console.log('  ✔ Copied webui/public → dist/public');
+    console.log('  copied webui/public -> dist/public');
   }
 
-  // Bundle with esbuild
-  const result = await build({
-    entryPoints: [join(ROOT, 'bin', 'creecode.js')],
-    bundle: true,
-    platform: 'node',
-    target: 'node20',
-    format: 'esm',
-    outfile: outFile,
-    banner: {
-      js: '#!/usr/bin/env node\nimport { createRequire as __ccCreateRequire } from "node:module";\nconst require = __ccCreateRequire(import.meta.url);\n',
-    },
-    // Mark node builtins as external (both node: and bare forms for CJS compat)
-    external: [
-      'node:*',
-      'undici',
-      // Bare builtins for CJS packages bundled in ESM
-      'assert', 'buffer', 'child_process', 'cluster', 'crypto', 'dgram',
-      'dns', 'domain', 'events', 'fs', 'http', 'http2', 'https', 'net',
-      'os', 'path', 'perf_hooks', 'punycode', 'querystring', 'readline',
-      'repl', 'stream', 'string_decoder', 'sys', 'timers', 'tls', 'tty',
-      'url', 'util', 'v8', 'vm', 'wasi', 'worker_threads', 'zlib',
-    ],
-    // Inline all local modules + npm deps
-    packages: 'bundle',
-    minify: false, // Keep readable for debugging
-    sourcemap: false,
-  });
+  const targets = filter
+    ? ENTRIES.filter(e => e.out.includes(filter))
+    : ENTRIES;
 
-  if (result.errors.length > 0) {
-    console.error('  ✖ Build errors:', result.errors);
-    process.exit(1);
+  for (const { entry, out } of targets) {
+    const result = await build({
+      entryPoints: [entry],
+      bundle: true,
+      platform: 'node',
+      target: 'node20',
+      format: 'esm',
+      outfile: out,
+      banner: {
+        js: '#!/usr/bin/env node\nimport { createRequire as __ccCreateRequire } from "node:module";\nconst require = __ccCreateRequire(import.meta.url);\n',
+      },
+      external: [
+        'node:*',
+        'undici',
+        'assert', 'buffer', 'child_process', 'cluster', 'crypto', 'dgram',
+        'dns', 'domain', 'events', 'fs', 'http', 'http2', 'https', 'net',
+        'os', 'path', 'perf_hooks', 'punycode', 'querystring', 'readline',
+        'repl', 'stream', 'string_decoder', 'sys', 'timers', 'tls', 'tty',
+        'url', 'util', 'v8', 'vm', 'wasi', 'worker_threads', 'zlib',
+      ],
+      packages: 'bundle',
+      minify: false,
+      sourcemap: false,
+    });
+
+    if (result.errors.length > 0) {
+      console.error('  build errors:', result.errors);
+      process.exit(1);
+    }
+
+    // Post-process the bundle
+    let content = readFileSync(out, 'utf-8');
+    content = content.replace(/^(#!\/usr\/bin\/env node\n)+/, '#!/usr/bin/env node\n');
+    content = content.replace(
+      /express\.static\([^)]+\)/g,
+      `express.static(new URL('./public', import.meta.url).pathname)`
+    );
+    writeFileSync(out, content, 'utf-8');
+
+    const { chmodSync } = await import('node:fs');
+    chmodSync(out, 0o755);
+
+    const stats = readFileSync(out);
+    const sizeKB = (stats.length / 1024).toFixed(1);
+    const name = out.split('/').pop();
+    console.log(`  bundled ${name} (${sizeKB} KB)`);
   }
 
-  // Post-process the bundle
-  let content = readFileSync(outFile, 'utf-8');
-
-  // Fix duplicate shebangs (entry point has one + banner adds one)
-  content = content.replace(/^(#!\/usr\/bin\/env node\n)+/, '#!/usr/bin/env node\n');
-
-
-  // Patch the webui server's static path to be relative to the bundle
-  content = content.replace(
-    /express\.static\([^)]+\)/g,
-    `express.static(new URL('./public', import.meta.url).pathname)`
-  );
-  writeFileSync(outFile, content, 'utf-8');
-
-  // Make executable
-  const { chmodSync } = await import('node:fs');
-  chmodSync(outFile, 0o755);
-
-  const stats = readFileSync(outFile);
-  const sizeKB = (stats.length / 1024).toFixed(1);
-
-  console.log(`  ✔ Bundled to ${outFile} (${sizeKB} KB)`);
-  console.log('\n✅ Done! Run with:');
-  console.log(`   node ${outFile}`);
-  console.log(`   # or: chmod +x ${outFile} && ./${outFile.replace(ROOT + '/', '')}`);
+  console.log('\ndone! run with:');
+  for (const { out } of targets) {
+    console.log(`  node ${out.replace(ROOT + '/', '')}`);
+  }
 }
 
 bundle().catch((err) => {
-  console.error('Bundle failed:', err.message);
+  console.error('bundle failed:', err.message);
   process.exit(1);
 });

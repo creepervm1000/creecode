@@ -11,6 +11,8 @@ import { jsonQuery } from './json_tool.js';
 import { think } from './think.js';
 import { addTodo, listTodos, updateTodo, deleteTodo, clearTodos } from './todo.js';
 import { getEnv } from './env.js';
+import { getDiscordUserInfo } from './discord_info.js';
+import { getTelegramUserInfo, getTelegramChatInfo } from './telegram_info.js';
 import { allowOutsideWorkspace, getWorkspaceRoot } from '../workspace.js';
 
 export const TOOL_DEFINITIONS = [
@@ -68,7 +70,14 @@ export const TOOL_DEFINITIONS = [
   { name: 'clear_todos', description: 'Clear todos (all, or only completed)', category: 'notes', handler: clearTodos,
     parameters: { filter: { type: 'string', required: false, description: '"all" or "done" (default: all)' } } },
   { name: 'think', description: 'Private scratchpad — use to plan without calling a real tool', category: 'meta', handler: think,
-    parameters: { thought: { type: 'string', required: true, description: 'Your reasoning' } } },
+    parameters: { thought: { type: "string", required: true, description: "Your reasoning" } } },
+  { name: "get_discord_user", description: "Look up a Discord user by ID or mention (e.g. <@123456>)", category: "discord", handler: getDiscordUserInfo,
+    parameters: { userId: { type: "string", description: "User ID (123456) or mention (<@123456>)", required: true } } },
+  { name: "get_telegram_user", description: "Look up a Telegram user by ID", category: "telegram", handler: getTelegramUserInfo,
+    parameters: { userId: { type: "string", description: "Telegram user ID (numeric)", required: true } } },
+  { name: "get_telegram_chat", description: "Look up a Telegram chat/group info by ID", category: "telegram", handler: getTelegramChatInfo,
+    parameters: { chatId: { type: "string", description: "Telegram chat ID (numeric)", required: true } } },
+];
 ];
 
 const TOOL_CALL_MODE_DESCRIPTIONS = {
