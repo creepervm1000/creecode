@@ -13,6 +13,9 @@ import { saveConfig, loadConfig } from './config.js';
 import { setRawMode } from './utils/terminal.js';
 import { createProvider, getProviderChoices, PROVIDERS } from './providers/index.js';
 import { showSidebar, clearSidebar, canShowSidebar, loadTodos, MIN_WIDTH } from './utils/sidebar.js';
+import { subagentManager } from './subagent.js';
+import { discoverSkills, initSkillDir, clearRuntimeTools, registerRuntimeTool } from './tools/index.js';
+import { normalizeAssistantResponse } from './utils/normalize.js';
 // Ensure keypress events fire on stdin (no-op on newer node, harmless elsewhere).
 readline.emitKeypressEvents(process.stdin);
 
@@ -128,7 +131,12 @@ const BASE_SYSTEM_PROMPT = `You are CreeCode, an expert AI coding assistant runn
 
 ## Global memory
 A persistent memory store lives at ~/.creecode/memory.json (separate from per-session notes/todos). Use the \`memory_*\` tools to remember long-lived facts about the user: their preferences, conventions, project-agnostic rules, environment quirks, and decisions they make once and want kept. Call \`memory_list\` at the start of a session if you want to recall what's already known. Don't store secrets (API keys, passwords) or ephemeral task state here — those don't belong in long-term memory.
-`;
+
+## Subagents
+You can spawn background subagents with the \`spawn_subagent\` tool to work on independent tasks in parallel. Each sub runs its own agent loop with its own messages (saved to ~/.creecode/subagents/<id>.json). When a sub needs approval for a prompt-trust tool call, you'll get a synthetic message describing the request_id — call \`decide_subagent_approval\` with that id and action "approve" or "deny". If you can't decide, the user can step in via /approve or /deny. When a sub finishes, you'll get a [subagent ... finished] message with its summary. Use \`list_subagents\` to see what's running, \`subagent_status\` for detail, \`kill_subagent\` to terminate.
+
+## Skills
+Custom user-defined skills live in ~/.creecode/skills/<name>/. Each skill is a folder with a SKILL.md (description + arg schema) and a run.js or run.sh. They are exposed to you as \`skill_<name>\` tools. The user can /init-skill to scaffold an example and /refresh-skills to reload after editing.`;
 
 
 /**
@@ -190,6 +198,15 @@ const COMMANDS = {
   '/settings': 'Open settings (trust levels, etc.)',
   '/system': 'Set a custom system prompt',
   '/tasks': 'Show task sidebar',
+  '/view': 'Show current viewable session (usage: /view [main|sub_id])',
+  '/compact': 'Compress conversation history via a summarizing LLM call',
+  '/sessions': 'List running subagents',
+  '/session': 'Show a subagent\'s messages (usage: /session <id>)',
+  '/approvals': 'List pending subagent approval requests',
+  '/approve': 'Approve a pending request (usage: /approve <request_id>)',
+  '/deny': 'Deny a pending request (usage: /deny <request_id>)',
+  '/init-skill': 'Create an example skill in ~/.creecode/skills/example-hello',
+  '/refresh-skills': 'Re-scan ~/.creecode/skills and register newly added ones',
   '/exit': 'Exit CreeCode',
 };
 
@@ -198,24 +215,6 @@ const TOOL_CALL_MODE_CHOICES = [
   { name: 'Native — use provider-native tool calling when supported', value: 'native' },
   { name: 'Both — allow native tool calling and XML fallback', value: 'both' },
 ];
-
-function normalizeAssistantResponse(response) {
-  if (typeof response === 'string') {
-    return {
-      text: response,
-      thinking: '',
-      nativeToolCalls: [],
-      assistantMessage: { role: 'assistant', content: response },
-    };
-  }
-
-  return {
-    text: response?.content || '',
-    thinking: response?.thinking || '',
-    nativeToolCalls: response?.nativeToolCalls || [],
-    assistantMessage: response?.assistantMessage || { role: 'assistant', content: response?.content || '' },
-  };
-}
 
 function buildSystemPrompt(trustConfig, config, customSystem = '') {
   return BASE_SYSTEM_PROMPT
@@ -405,6 +404,51 @@ export async function startChat(provider, config) {
       info(`Loaded ${pastMessages.length} messages from previous session (.creecode/conversation.json)`);
     }
 
+    // ---- Skills discovery ----
+    // First-run convenience: if the user has never set up skills, drop a
+    // starter example in place so the system isn't empty on first use.
+    try { initSkillDir(config); } catch {}
+    clearRuntimeTools();
+    const skills = discoverSkills(config);
+    for (const sk of skills) {
+      try { registerRuntimeTool(skillToToolDef(sk)); } catch {}
+    }
+    if (skills.length > 0) {
+      info(`Loaded ${skills.length} skill${skills.length === 1 ? '' : 's'}: ${skills.map(s => s.name).join(', ')}`);
+    }
+
+    // ---- Subagent manager wiring ----
+    // Pings and approval requests are surfaced to the main agent as synthetic
+    // user-turn messages, so the main agent can react on its next iteration.
+    const mainCtx = {
+      provider, config, trustConfig,
+      onSubFinished: (sub, ev) => {
+        const tag = ev.error ? 'error' : 'finished';
+        const line = `\n[subagent ${sub.id} ${tag}]${ev.error ? ' ' + ev.error : ''}\n${sub.summary || ''}\n`;
+        process.stdout.write('\n' + chalk.magenta(line) + '\n');
+        if (isHandlingLine) {
+          messages.push({ role: 'user', content: `[subagent ${sub.id} ${tag}] ${sub.summary || (ev.error || '')}` });
+        }
+      },
+      onApprovalNeeded: ({ requestId, sub, tool }) => {
+        const note = `\n[subagent ${sub.id} wants ${tool.name}] (request ${requestId})\n`;
+        process.stdout.write('\n' + chalk.yellow(note) + '\n');
+        if (isHandlingLine) {
+          messages.push({
+            role: 'user',
+            content: `[subagent ${sub.id} requests approval] tool: ${tool.name} args: ${JSON.stringify(tool.args || {})} request_id: ${requestId}. Call decide_subagent_approval with that request_id and action "approve" or "deny".`,
+          });
+        } else {
+          // Main is idle — surface as a one-line system nudge for the next
+          // user turn rather than synthesizing tool calls.
+          process.stdout.write(chalk.yellow('  (type something for the main agent to decide; or use /approvals)\n'));
+          subagentManager._pendingIdle = subagentManager._pendingIdle || [];
+          subagentManager._pendingIdle.push({ requestId, sub, tool });
+        }
+      },
+    };
+    subagentManager.attachMainAgent(mainCtx);
+
     console.log(chalk.cyan.bold('\n  CreeCode'));
     dim(`  Provider: ${config.provider} | Model: ${config.model || 'default'}`);
     dim(`  Trust — Commands: ${trustConfig.commands} | Files: ${trustConfig.files}`);
@@ -414,23 +458,35 @@ export async function startChat(provider, config) {
     dim('  Type /help for commands, /exit to quit.\n');
 
     let isHandlingLine = false;
-
-    // build dynamic prompt with task count
+    const pendingInput = [];     // user input captured while the agent is busy
+    // currentView is wrapped in an object so handleCommand (called by value)
+    // can mutate it and the caller sees the change.
+    const viewState = { current: 'main' };
+    // Inject view info into the prompt so the user always knows what's live.
     function buildPrompt() {
       const todos = loadTodos(config);
       const pending = todos.filter(t => !t.done).length;
-      if (pending > 0) {
-        rl.setPrompt(chalk.green('❯ ') + chalk.cyan(`[${pending} task${pending > 1 ? 's' : ''}] `));
-      } else {
-        rl.setPrompt(chalk.green('❯ '));
-      }
+      const viewTag = viewState.current === 'main'
+        ? chalk.cyan('main')
+        : chalk.magenta(`sub:${viewState.current}`);
+      const tail = pending > 0 ? chalk.cyan(`[${pending} task${pending > 1 ? 's' : ''}] `) : '';
+      rl.setPrompt(chalk.green('❯ ') + viewTag + ' ' + tail);
     }
 
     buildPrompt();
     rl.prompt();
 
     rl.on('line', async (userInput) => {
-      if (isClosing || isHandlingLine) return;
+      if (isClosing) return;
+
+      // While the agent is busy, queue input instead of dropping it. The
+      // agent loop drains the queue when it returns. /exit, /quit, and
+      // Esc-cancel are still honored immediately (the cancellation flag
+      // is checked in the loop).
+      if (isHandlingLine) {
+        pendingInput.push(userInput);
+        return;
+      }
 
       isHandlingLine = true;
       rl.pause();
@@ -448,7 +504,7 @@ export async function startChat(provider, config) {
           }, (newSystemPrompt) => {
             systemPrompt = newSystemPrompt;
             messages[0] = { role: 'system', content: systemPrompt };
-          });
+          }, { viewState, buildPrompt });
           return;
         }
 
@@ -461,10 +517,32 @@ export async function startChat(provider, config) {
       } finally {
         isHandlingLine = false;
         if (!isClosing) {
-          rl.resume();
-          setRawMode(true);
-          buildPrompt();
-          rl.prompt();
+          // Drain any input captured while the agent was running. We only
+          // process the FIRST queued line here; the rest wait for the next
+          // turn so the user can see the agent's final response first.
+          if (pendingInput.length > 0) {
+            const next = pendingInput.shift();
+            isHandlingLine = true;
+            try {
+              const trimmedNext = next.trim();
+              if (trimmedNext) {
+                if (trimmedNext.startsWith('/')) {
+                  await handleCommand(trimmedNext, messages, config, provider, rl, trustConfig, (p) => { provider = p; }, (sp) => { systemPrompt = sp; messages[0] = { role: 'system', content: systemPrompt }; }, { viewState, buildPrompt });
+                } else {
+                  messages.push({ role: 'user', content: trimmedNext });
+                  await agentLoop(provider, messages, config, trustConfig, cancellation);
+                  cancellation.value = false;
+                }
+              }
+            } catch (e) { warn(`Queued input error: ${e.message}`); }
+            finally { isHandlingLine = false; }
+          }
+          if (!isClosing) {
+            rl.resume();
+            setRawMode(true);
+            buildPrompt();
+            rl.prompt();
+          }
         }
       }
     });
@@ -726,7 +804,7 @@ function summarizeResult(toolName, result) {
 /**
  * Handle slash commands.
  */
-async function handleCommand(input, messages, config, provider, rl, trustConfig, onProviderChange, onSystemPromptChange) {
+async function handleCommand(input, messages, config, provider, rl, trustConfig, onProviderChange, onSystemPromptChange, state = {}) {
   const cmd = input.split(' ')[0];
 
   switch (cmd) {
@@ -770,9 +848,172 @@ async function handleCommand(input, messages, config, provider, rl, trustConfig,
       showTasksPanel(config);
       break;
 
+    case '/view': {
+      // No arg -> show current view. arg "main" -> main. Otherwise treat
+      // as a subagent id. The view is purely a display concern; it does
+      // not redirect user input (that always goes to the main session).
+      const { viewState, buildPrompt } = state;
+      const arg = input.slice('/view'.length).trim();
+      if (!arg) {
+        if (viewState.current === 'main') {
+          success('Viewing: main agent\n');
+        } else {
+          const sub = subagentManager.get(viewState.current);
+          if (sub) success(`Viewing: ${sub.name || sub.id} (${sub.status})\n`);
+          else { viewState.current = 'main'; success('Viewing: main agent (was stale)\n'); }
+        }
+        break;
+      }
+      if (arg === 'main' || arg === 'm') {
+        viewState.current = 'main';
+        success('Switched view to: main\n');
+        buildPrompt();
+        rl.prompt();
+        break;
+      }
+      const sub = subagentManager.get(arg);
+      if (!sub) { warn(`No subagent with id ${arg}. Use /sessions to list.\n`); break; }
+      viewState.current = sub.id;
+      success(`Switched view to: ${sub.name || sub.id} (${sub.status})\n`);
+      buildPrompt();
+      rl.prompt();
+      break;
+    }
+
+    case '/compact': {
+      // Compress conversation history with a summarizing LLM call.
+      // Keeps the system prompt + summary + last few turns.
+      const keepLast = 4;
+      if (messages.length < keepLast + 2) {
+        warn('Nothing to compact — conversation is too short.\n');
+        break;
+      }
+      const sys = messages[0];
+      const tail = messages.slice(-keepLast);
+      const toSummarize = messages.slice(1, -keepLast);
+      const transcript = toSummarize.map(m => {
+        const role = m.role === 'assistant' ? 'AGENT' : m.role === 'tool' ? 'TOOL' : m.role.toUpperCase();
+        const c = typeof m.content === 'string' ? m.content : JSON.stringify(m.content);
+        return `${role}: ${c.length > 2000 ? c.slice(0, 2000) + '...[truncated]' : c}`;
+      }).join('\n\n');
+      const summaryPrompt = `You are compressing a CreeCode conversation. Produce a concise summary that preserves:\n  - The user's original goal\n  - Key decisions and constraints the agent learned\n  - Important file paths, tool results, and identifiers\n  - Unresolved questions or pending actions\n\nDrop greetings, repetition, and irrelevant tangents. Output ONLY the summary text — no preamble, no headings, no markdown.\n\n---\nTRANSCRIPT:\n${transcript}\n---`;
+      const spinner = createSpinner();
+      spinner.start();
+      try {
+        const compactMessages = [
+          { role: 'system', content: 'You are a precise conversation compressor.' },
+          { role: 'user', content: summaryPrompt },
+        ];
+        const raw = await provider.streamChat(compactMessages, {});
+        const norm = normalizeAssistantResponse(raw);
+        const summary = norm.text.trim() || '(empty summary)';
+        spinner.stop();
+        success(`Compacted ${toSummarize.length} message(s) into a ${summary.length}-char summary.\n`);
+        messages.length = 0;
+        messages.push(sys);
+        messages.push({ role: 'user', content: `[Compacted conversation — earlier turns replaced by this summary]\n\n${summary}` });
+        messages.push({ role: 'assistant', content: 'Understood. I have the summary of the earlier conversation and the last few turns. Continuing from here.' });
+        for (const m of tail) messages.push(m);
+        saveHistory(messages);
+      } catch (e) {
+        spinner.stop();
+        warn(`Compact failed: ${e.message}\n`);
+      }
+      break;
+    }
+
     case '/settings':
       await openSettings(config, provider, trustConfig, onProviderChange, onSystemPromptChange);
       break;
+
+    case '/sessions': {
+      const list = subagentManager.list();
+      if (list.length === 0) {
+        dim('  No subagents running.\n');
+      } else {
+        console.log(chalk.white.bold('\n  Subagents\n'));
+        for (const s of list) {
+          const statusColor = s.status === 'running' ? chalk.yellow : s.status === 'done' ? chalk.green : chalk.gray;
+          console.log(`  ${statusColor(s.status.padEnd(10))} ${chalk.cyan(s.id)}  ${chalk.gray(s.name)}`);
+          console.log(`    ${chalk.gray('task:')} ${s.task.slice(0, 100)}`);
+          if (s.summary) console.log(`    ${chalk.gray('summary:')} ${s.summary.slice(0, 100)}`);
+        }
+        const pending = subagentManager.pendingApprovals.length;
+        if (pending > 0) {
+          console.log(chalk.yellow(`\n  ${pending} pending approval request(s) — use /approvals\n`));
+        } else {
+          console.log();
+        }
+      }
+      break;
+    }
+
+    case '/session': {
+      const arg = input.slice('/session'.length).trim();
+      if (!arg) { warn('usage: /session <subagent_id>\n'); break; }
+      const sub = subagentManager.get(arg);
+      if (!sub) { warn(`No subagent with id ${arg}\n`); break; }
+      console.log(chalk.white.bold(`\n  Subagent ${sub.id} (${sub.name}) — ${sub.status}\n`));
+      console.log(chalk.gray(`  task: ${sub.task}\n`));
+      const last = sub.messages.slice(-12);
+      for (const m of last) {
+        const tag = m.role === 'user' ? chalk.blue('USER ') : m.role === 'assistant' ? chalk.green('AGENT') : chalk.gray(m.role.toUpperCase());
+        const body = typeof m.content === 'string' ? m.content : JSON.stringify(m.content);
+        const text = body.length > 400 ? body.slice(0, 400) + '...' : body;
+        console.log(`  ${tag}  ${text}\n`);
+      }
+      if (sub.summary) {
+        console.log(chalk.gray('  summary: ') + sub.summary + '\n');
+      }
+      break;
+    }
+
+    case '/approvals': {
+      const list = subagentManager.pendingApprovals;
+      if (list.length === 0) { dim('  No pending approvals.\n'); break; }
+      console.log(chalk.white.bold('\n  Pending approvals\n'));
+      for (const p of list) {
+        console.log(`  ${chalk.cyan(p.id)}  ${chalk.gray(p.sub.id + ' / ' + p.tool.name)}`);
+        console.log(`    ${chalk.gray('args:')} ${JSON.stringify(p.tool.args || {}).slice(0, 200)}`);
+      }
+      console.log();
+      break;
+    }
+
+    case '/approve': {
+      const id = input.slice('/approve'.length).trim();
+      if (!id) { warn('usage: /approve <request_id>\n'); break; }
+      const ok = subagentManager.resolveApproval(id, { action: 'approve', decided_by: 'user', reason: 'user approved via /approve' });
+      if (ok) success(`Approved ${id}\n`); else warn(`No pending request with id ${id}\n`);
+      break;
+    }
+
+    case '/deny': {
+      const id = input.slice('/deny'.length).trim();
+      if (!id) { warn('usage: /deny <request_id>\n'); break; }
+      const ok = subagentManager.resolveApproval(id, { action: 'deny', decided_by: 'user', reason: 'user denied via /deny' });
+      if (ok) success(`Denied ${id}\n`); else warn(`No pending request with id ${id}\n`);
+      break;
+    }
+
+    case '/init-skill': {
+      try {
+        const dir = initSkillDir(config);
+        clearRuntimeTools();
+        for (const sk of discoverSkills(config)) registerRuntimeTool(skillToToolDef(sk));
+        success(`Skills dir: ${dir}`);
+        info('Edit SKILL.md in any subdir under it, drop a run.js or run.sh, then /refresh-skills.\n');
+      } catch (e) { warn(`Failed: ${e.message}\n`); }
+      break;
+    }
+
+    case '/refresh-skills': {
+      clearRuntimeTools();
+      const list = discoverSkills(config);
+      for (const sk of list) registerRuntimeTool(skillToToolDef(sk));
+      success(`Reloaded ${list.length} skill${list.length === 1 ? '' : 's'}.\n`);
+      break;
+    }
 
     case '/init':
       {

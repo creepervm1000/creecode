@@ -19,7 +19,39 @@ import { csvParse, csvRead, yamlRead, tomlRead } from './data.js';
 import { currentTime, cronNext } from './time.js';
 import { osInfo, projectTree, diskUsage } from './system.js';
 import { memoryList, memoryGet, memoryAdd, memoryAppend, memoryEdit, memoryClearLine, memoryRemove, memoryClear, memorySearch } from './memory.js';
+import { discoverSkills, skillToToolDef, initSkillDir, runSkill } from './skills.js';
+import { spawnSubagent, listSubagents, subagentStatus, decideSubagentApproval, killSubagent } from './subagent_tools.js';
 import { allowOutsideWorkspace, getWorkspaceRoot } from '../workspace.js';
+
+// Re-exports for downstream modules (subagent.js, chat.js) so they don't need
+// to import from internal tool files directly.
+export { discoverSkills, skillToToolDef, initSkillDir, runSkill };
+export { spawnSubagent, listSubagents, subagentStatus, decideSubagentApproval, killSubagent };
+export { normalizeAssistantResponse } from '../utils/normalize.js';
+
+// Runtime-registered tools (skills, etc.) — added at session start, removed
+// at session end. Static tool defs are in TOOL_DEFINITIONS below.
+const RUNTIME_TOOLS = new Map();
+
+export function registerRuntimeTool(toolDef) {
+  RUNTIME_TOOLS.set(toolDef.name, toolDef);
+}
+
+export function unregisterRuntimeTool(name) {
+  RUNTIME_TOOLS.delete(name);
+}
+
+export function clearRuntimeTools() {
+  RUNTIME_TOOLS.clear();
+}
+
+export function getRuntimeTools() {
+  return Array.from(RUNTIME_TOOLS.values());
+}
+
+function getAllToolDefs() {
+  return [...TOOL_DEFINITIONS, ...RUNTIME_TOOLS.values()];
+}
 
 export const TOOL_DEFINITIONS = [
   { name: 'read_file', description: 'Read the contents of a file', category: 'files', handler: readFile,
@@ -155,6 +187,15 @@ export const TOOL_DEFINITIONS = [
     parameters: { tag: { type: 'string', required: false, description: 'If set, only clear entries with this tag' } } },
   { name: 'memory_search', description: 'Regex search across global memory entries', category: 'memory', handler: memorySearch,
     parameters: { pattern: { type: 'string', required: true, description: 'Regex pattern' }, case_insensitive: { type: 'boolean', required: false, description: 'Case-insensitive (default false)' } } },
+  { name: 'spawn_subagent', description: 'Spawn a subagent to work on a task in the background. Subagent tool calls in prompt-trust categories route back here for approval.', category: 'subagents', handler: spawnSubagent,
+    parameters: { task: { type: 'string', required: true, description: 'What the subagent should do' }, name: { type: 'string', required: false, description: 'Optional display name' }, system_prompt: { type: 'string', required: false, description: 'Optional override system prompt' } } },
+  { name: 'list_subagents', description: 'List all subagents and their status', category: 'subagents', handler: listSubagents, parameters: {} },
+  { name: 'subagent_status', description: 'Get status, summary, and message count of a subagent', category: 'subagents', handler: subagentStatus,
+    parameters: { id: { type: 'string', required: true, description: 'Subagent id' } } },
+  { name: 'decide_subagent_approval', description: 'Approve or deny a pending subagent tool-call approval request', category: 'subagents', handler: decideSubagentApproval,
+    parameters: { request_id: { type: 'string', required: true, description: 'Approval request id' }, action: { type: 'string', required: true, description: '"approve" or "deny"' }, reason: { type: 'string', required: false, description: 'Optional reason' } } },
+  { name: 'kill_subagent', description: 'Terminate a running subagent', category: 'subagents', handler: killSubagent,
+    parameters: { id: { type: 'string', required: true, description: 'Subagent id' } } },
 ];
 
 const TOOL_CALL_MODE_DESCRIPTIONS = {
@@ -191,7 +232,7 @@ export function buildToolsPrompt(trustConfig, config = {}) {
   const workspaceNote = allowOutsideWorkspace(config)
     ? `Outside-workspace access is enabled. Prefer staying in ${workspaceRoot} unless the task clearly requires leaving it.`
     : `All file paths and command working directories must stay inside ${workspaceRoot}.`;
-  const availableTools = TOOL_DEFINITIONS.filter(t => {
+  const availableTools = getAllToolDefs().filter(t => {
     const level = trustConfig[t.category];
     if (level === 'no-trust') return false;
     return isToolEnabled(t, config);
@@ -302,7 +343,7 @@ export function parseToolCalls(response) {
 }
 
 export async function executeTool(toolCall, trustConfig, config = {}) {
-  const toolDef = TOOL_DEFINITIONS.find(t => t.name === toolCall.name);
+  const toolDef = RUNTIME_TOOLS.get(toolCall.name) || TOOL_DEFINITIONS.find(t => t.name === toolCall.name);
   if (!toolDef) return { error: `Unknown tool: ${toolCall.name}` };
   if (!isToolEnabled(toolDef, config)) return { error: `Tool disabled by config: ${toolDef.name}` };
   const trustLevel = trustConfig[toolDef.category] || 'prompt-trust';

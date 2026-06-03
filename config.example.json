@@ -24,12 +24,16 @@
     "data": "agent-decides-trust",
     "time": "full-trust",
     "system": "agent-decides-trust",
-    "memory": "full-trust"
+    "memory": "full-trust",
+    "skills": "prompt-trust",
+    "subagents": "full-trust"
   },
   "temperature": 0.2,
   "maxTokens": 4096,
   "allowOutsideWorkspace": false,
   "disabledTools": [],
   "searchInstance": null,
+  "dangerousPaths": [],
+  "skillsDir": null,
   "systemPromptAppendix": ""
 }

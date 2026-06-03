@@ -33,6 +33,9 @@ export const DEFAULT_CONFIG = {
 
   memoryFile: null,
 
+  dangerousPaths: [],
+  skillsDir: null,
+
   disabledTools: [],
   enabledTools: null,
 
@@ -50,6 +53,8 @@ export const DEFAULT_CONFIG = {
     time: 'full-trust',
     system: 'agent-decides-trust',
     memory: 'full-trust',
+    skills: 'prompt-trust',
+    subagents: 'full-trust',
   },
 
   theme: 'dark',

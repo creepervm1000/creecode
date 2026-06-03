@@ -23,6 +23,8 @@ export const TRUST_CATEGORIES = {
   time:     'Time / Cron',
   system:   'System Info / Project Tree',
   memory:   'Global Memory Store',
+  skills:   'Custom Skills',
+  subagents: 'Subagent Control',
 };
 
 export async function checkTrust(category, trustLevel, description, isSafe = false) {

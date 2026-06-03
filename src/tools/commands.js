@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { checkTrust } from '../trust.js';
-import { getWorkspaceRoot, resolveWorkspacePath } from '../workspace.js';
+import { getWorkspaceRoot, resolveWorkspacePath, commandTouchesDangerous } from '../workspace.js';
 
 /**
  * Shell command execution tool.
@@ -39,6 +39,16 @@ export async function runCommand(args, trustLevel, policy = {}) {
   const cwd = cwdResult.resolvedPath;
   const timeout = args.timeout || 30000; // 30s default
   const workspaceRoot = getWorkspaceRoot();
+
+  // Hard safety block: refuse destructive commands that target system paths
+  // or other drives, even with full trust.
+  const danger = commandTouchesDangerous(command, policy);
+  if (danger) {
+    return {
+      error: `Refusing to run dangerous command: ${command} (matched ${danger.reason}: ${danger.value}). This is a hard safety block.`,
+      blocked: true,
+    };
+  }
 
   const safe = isSafeCommand(command);
   const allowed = await checkTrust(
