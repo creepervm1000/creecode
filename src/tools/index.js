@@ -18,6 +18,7 @@ import { base64Encode, base64Decode, hashText, urlEncode, urlDecode, jsonFormat,
 import { csvParse, csvRead, yamlRead, tomlRead } from './data.js';
 import { currentTime, cronNext } from './time.js';
 import { osInfo, projectTree, diskUsage } from './system.js';
+import { memoryList, memoryGet, memoryAdd, memoryAppend, memoryEdit, memoryClearLine, memoryRemove, memoryClear, memorySearch } from './memory.js';
 import { allowOutsideWorkspace, getWorkspaceRoot } from '../workspace.js';
 
 export const TOOL_DEFINITIONS = [
@@ -136,6 +137,24 @@ export const TOOL_DEFINITIONS = [
     parameters: { path_a: { type: 'string', required: true, description: 'First path' }, path_b: { type: 'string', required: true, description: 'Second path' } } },
   { name: 'find_replace', description: 'Regex find-and-replace across files under a path', category: 'files', handler: findReplace,
     parameters: { pattern: { type: 'string', required: true, description: 'Regex pattern' }, replacement: { type: 'string', required: true, description: 'Replacement string ($1, $2, ... supported)' }, path: { type: 'string', required: false, description: 'Root path (default workspace root)' }, file_glob: { type: 'string', required: false, description: 'Restrict to files matching this glob' }, flags: { type: 'string', required: false, description: 'Regex flags (default "g")' }, dry_run: { type: 'boolean', required: false, description: 'If true, do not write changes' } } },
+  { name: 'memory_list', description: 'List global memory entries (~/.creecode/memory.json)', category: 'memory', handler: memoryList,
+    parameters: { tag: { type: 'string', required: false, description: 'Filter by tag' }, search: { type: 'string', required: false, description: 'Regex search across text and tag' }, case_insensitive: { type: 'boolean', required: false, description: 'Case-insensitive search (default false)' } } },
+  { name: 'memory_get', description: 'Fetch a single global memory entry by id', category: 'memory', handler: memoryGet,
+    parameters: { id: { type: 'number', required: true, description: 'Entry id' } } },
+  { name: 'memory_add', description: 'Add a new global memory entry', category: 'memory', handler: memoryAdd,
+    parameters: { text: { type: 'string', required: true, description: 'Memory text' }, tag: { type: 'string', required: false, description: 'Optional tag (e.g. "preference", "convention")' } } },
+  { name: 'memory_append', description: 'Append text to an existing memory entry (newline-separated)', category: 'memory', handler: memoryAppend,
+    parameters: { id: { type: 'number', required: true, description: 'Entry id' }, text: { type: 'string', required: true, description: 'Text to append' } } },
+  { name: 'memory_edit', description: 'Replace the text (and optionally tag) of a memory entry', category: 'memory', handler: memoryEdit,
+    parameters: { id: { type: 'number', required: true, description: 'Entry id' }, text: { type: 'string', required: true, description: 'New text' }, tag: { type: 'string', required: false, description: 'New tag (pass empty string to clear)' } } },
+  { name: 'memory_clear_line', description: 'Remove a specific 1-based line from a multi-line memory entry', category: 'memory', handler: memoryClearLine,
+    parameters: { id: { type: 'number', required: true, description: 'Entry id' }, line: { type: 'number', required: true, description: '1-based line number to remove' } } },
+  { name: 'memory_remove', description: 'Delete a memory entry by id', category: 'memory', handler: memoryRemove,
+    parameters: { id: { type: 'number', required: true, description: 'Entry id' } } },
+  { name: 'memory_clear', description: 'Wipe all memory entries, or all with a given tag', category: 'memory', handler: memoryClear,
+    parameters: { tag: { type: 'string', required: false, description: 'If set, only clear entries with this tag' } } },
+  { name: 'memory_search', description: 'Regex search across global memory entries', category: 'memory', handler: memorySearch,
+    parameters: { pattern: { type: 'string', required: true, description: 'Regex pattern' }, case_insensitive: { type: 'boolean', required: false, description: 'Case-insensitive (default false)' } } },
 ];
 
 const TOOL_CALL_MODE_DESCRIPTIONS = {

@@ -31,6 +31,8 @@ export const DEFAULT_CONFIG = {
 
   searchInstance: null,
 
+  memoryFile: null,
+
   disabledTools: [],
   enabledTools: null,
 
@@ -47,6 +49,7 @@ export const DEFAULT_CONFIG = {
     data: 'agent-decides-trust',
     time: 'full-trust',
     system: 'agent-decides-trust',
+    memory: 'full-trust',
   },
 
   theme: 'dark',

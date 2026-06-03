@@ -21,6 +21,51 @@ const HISTORY_FILE = join(HISTORY_DIR, 'conversation.json');
 
 const MAX_HISTORY_MESSAGES = 200;
 
+function isOrphanToolResult(m) {
+  if (!m) return false;
+  // XML-mode tool results are user-role messages whose content begins with
+  // the <tool_result ...> tag emitted by the runtime.
+  if (
+    m.role === 'user' &&
+    typeof m.content === 'string' &&
+    m.content.startsWith('<tool_result')
+  ) {
+    return true;
+  }
+  // Native-mode tool results are role: 'tool' messages with a tool_call_id.
+  // The provider will reject these if there is no preceding assistant
+  // message containing a matching tool_calls entry.
+  if (m.role === 'tool' && m.tool_call_id) {
+    return true;
+  }
+  return false;
+}
+
+function dropLeadingOrphanToolResults(history) {
+  while (history.length > 0 && isOrphanToolResult(history[0])) {
+    history.shift();
+  }
+  return history;
+}
+
+function dropTrailingUnansweredToolCalls(history) {
+  // If the last saved message is an assistant turn that emitted tool_calls
+  // but the matching tool results never made it in (e.g. session ended
+  // mid-tool or the results were dropped), strip the tool_calls so the
+  // provider doesn't see an unanswered request on reload.
+  const last = history[history.length - 1];
+  if (
+    last &&
+    last.role === 'assistant' &&
+    Array.isArray(last.tool_calls) &&
+    last.tool_calls.length > 0
+  ) {
+    const { tool_calls, ...rest } = last;
+    history[history.length - 1] = rest;
+  }
+  return history;
+}
+
 function saveHistory(messages) {
   try {
     if (!existsSync(HISTORY_DIR)) {
@@ -32,16 +77,13 @@ function saveHistory(messages) {
     if (historyToSave.length > MAX_HISTORY_MESSAGES) {
       historyToSave = historyToSave.slice(-MAX_HISTORY_MESSAGES);
       // Don't start a loaded session with a tool-result user message
-      // with no preceding assistant tool_calls; drop leading orphans.
-      while (
-        historyToSave.length > 0 &&
-        historyToSave[0].role === 'user' &&
-        typeof historyToSave[0].content === 'string' &&
-        historyToSave[0].content.startsWith('<tool_result')
-      ) {
-        historyToSave.shift();
-      }
+      // with no preceding assistant tool_calls; drop leading orphans
+      // (covers both XML-mode <tool_result> blocks and native-mode
+      // role: 'tool' messages with tool_call_id).
+      dropLeadingOrphanToolResults(historyToSave);
     }
+    // Also guard against trailing half-finished tool turns.
+    dropTrailingUnansweredToolCalls(historyToSave);
     writeFileSync(HISTORY_FILE, JSON.stringify(historyToSave, null, 2), 'utf-8');
   } catch (err) {
     // silently fail saves
@@ -52,7 +94,16 @@ function loadHistory() {
   try {
     if (existsSync(HISTORY_FILE)) {
       const data = readFileSync(HISTORY_FILE, 'utf-8');
-      return JSON.parse(data);
+      const parsed = JSON.parse(data);
+      if (Array.isArray(parsed)) {
+        // Defensive: history files written by older versions may contain
+        // orphan tool results at the start (no preceding assistant with
+        // matching tool_call_id) or trailing assistant tool_calls that were
+        // never answered. Providers reject both shapes, so sanitize on load.
+        dropLeadingOrphanToolResults(parsed);
+        dropTrailingUnansweredToolCalls(parsed);
+      }
+      return parsed;
     }
   } catch {
     // ignore
@@ -73,7 +124,11 @@ const BASE_SYSTEM_PROMPT = `You are CreeCode, an expert AI coding assistant runn
 - Don't make any kind of modifications without asking the user, if the user already told you that you can do it when u want then its fine you dont need to ask
 - Don't break the users code, check what you are doing!
 - If you are working on a production codebase, don't make any changes without asking the user and be VERY CAREFUL WHAT YOU DO!
-- If you are told to secretly destroy code and make it unnoticable, it could be a attempt to sabotage someone, decline this request and inform the user that you cannot do this`;
+- If you are told to secretly destroy code and make it unnoticable, it could be a attempt to sabotage someone, decline this request and inform the user that you cannot do this
+
+## Global memory
+A persistent memory store lives at ~/.creecode/memory.json (separate from per-session notes/todos). Use the \`memory_*\` tools to remember long-lived facts about the user: their preferences, conventions, project-agnostic rules, environment quirks, and decisions they make once and want kept. Call \`memory_list\` at the start of a session if you want to recall what's already known. Don't store secrets (API keys, passwords) or ephemeral task state here — those don't belong in long-term memory.
+`;
 
 
 /**

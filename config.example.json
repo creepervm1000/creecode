@@ -23,7 +23,8 @@
     "text": "full-trust",
     "data": "agent-decides-trust",
     "time": "full-trust",
-    "system": "agent-decides-trust"
+    "system": "agent-decides-trust",
+    "memory": "full-trust"
   },
   "temperature": 0.2,
   "maxTokens": 4096,

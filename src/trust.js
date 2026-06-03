@@ -22,6 +22,7 @@ export const TRUST_CATEGORIES = {
   data:     'CSV / YAML / TOML',
   time:     'Time / Cron',
   system:   'System Info / Project Tree',
+  memory:   'Global Memory Store',
 };
 
 export async function checkTrust(category, trustLevel, description, isSafe = false) {
