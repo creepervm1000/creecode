@@ -13,6 +13,8 @@ import { saveConfig, loadConfig } from './config.js';
 import { setRawMode } from './utils/terminal.js';
 import { createProvider, getProviderChoices, PROVIDERS } from './providers/index.js';
 import { showSidebar, clearSidebar, canShowSidebar, loadTodos, MIN_WIDTH } from './utils/sidebar.js';
+// Ensure keypress events fire on stdin (no-op on newer node, harmless elsewhere).
+readline.emitKeypressEvents(process.stdin);
 
 const HISTORY_DIR = join(process.cwd(), '.creecode');
 const HISTORY_FILE = join(HISTORY_DIR, 'conversation.json');
@@ -274,20 +276,36 @@ export async function startChat(provider, config) {
     let isClosing = false;
     const initialRawMode = Boolean(process.stdin.isRaw);
 
+    // Shared cancellation flag. The agent loop checks this between iterations
+    // and between tool calls. Esc at the prompt is a no-op (handled below);
+    // Esc during an in-flight task flips this so the loop bails out cleanly
+    // and drops back to the user prompt without losing conversation history.
+    const cancellation = { value: false };
+
     const cleanupAndResolve = () => {
       if (isClosing) return;
       isClosing = true;
       clearInterval(keepAlive);
       process.off('SIGINT', handleSigint);
+      try { saveHistory(messages); } catch {}
       resolve();
     };
 
     const closeInterface = () => {
       if (isClosing) return;
+      try { saveHistory(messages); } catch {}
       rl.close();
     };
 
     const handleSigint = () => {
+      // If a task is running, treat the first Ctrl+C as "cancel task" and
+      // surface a second one as "exit REPL". This matches muscle memory from
+      // shells / REPLs.
+      if (isHandlingLine) {
+        cancellation.value = true;
+        process.stdout.write('\n' + chalk.yellow('⚠ Cancelling current task... (press Ctrl+C again to exit)') + '\n');
+        return;
+      }
       process.stdout.write('\n');
       success('Goodbye!');
       closeInterface();
@@ -295,6 +313,21 @@ export async function startChat(provider, config) {
 
     process.on('SIGINT', handleSigint);
     rl.on('SIGINT', handleSigint);
+
+    // Esc key: cancel the current agent task. While at the prompt, do
+    // nothing (don't accidentally close the REPL).
+    process.stdin.on('keypress', (_str, key) => {
+      if (!key) return;
+      if (key.name === 'escape' && isHandlingLine && !cancellation.value) {
+        cancellation.value = true;
+        process.stdout.write('\n' + chalk.yellow('⚠ Cancelling current task... (press Esc again to force-exit)') + '\n');
+      } else if (key.name === 'escape' && isHandlingLine && cancellation.value) {
+        // Already cancelling — escalate to full exit.
+        process.stdout.write('\n');
+        success('Force-exit requested.');
+        closeInterface();
+      }
+    });
 
     // Build system prompt with available tools
     const trustConfig = config.trust || { commands: 'prompt-trust', files: 'prompt-trust' };
@@ -365,7 +398,8 @@ export async function startChat(provider, config) {
         }
 
         messages.push({ role: 'user', content: trimmed });
-        await agentLoop(provider, messages, config, trustConfig);
+        await agentLoop(provider, messages, config, trustConfig, cancellation);
+        cancellation.value = false;  // reset after loop returns
         showSidebar(config);
       } catch (err) {
         warn(`Input loop error: ${err.message}`);
@@ -409,16 +443,37 @@ export async function startChat(provider, config) {
 /**
  * Agent loop: send message → parse response → execute tools → feed results back → repeat.
  * Loops until the AI responds without any tool calls.
+ *
+ * `cancellation` is a {value: boolean} ref. When set to true mid-loop, the
+ * loop bails out at the next safe boundary (between iterations or between
+ * tool calls), reverts the messages added during this turn, and saves
+ * history so the user can keep typing from the same point.
  */
-async function agentLoop(provider, messages, config, trustConfig) {
-  const MAX_ITERATIONS = 20;
+async function agentLoop(provider, messages, config, trustConfig, cancellation = { value: false }) {
+  // No hard cap. The loop runs until the model stops emitting tool calls
+  // or the user cancels via Esc / Ctrl+C. (The legacy `maxIterations`
+  // config field is no longer honored.)
+  const MAX_ITERATIONS = Infinity;
   let iteration = 0;
   // Remember length before the agent starts adding turns so we can cleanly
   // rewind on error instead of blindly popping the last message (which on
   // iter >= 2 is a tool-result user message, not the user's original input).
   const baselineLen = messages.length;
 
+  // Bail helper: rewind any new messages added during this turn, save
+  // history, return to caller.
+  const cancel = (reason) => {
+    if (messages.length > baselineLen) messages.length = baselineLen;
+    else messages.pop();
+    saveHistory(messages);
+    info(reason || 'Task cancelled. Conversation preserved.');
+  };
+
   while (iteration < MAX_ITERATIONS) {
+    if (cancellation.value) {
+      cancel();
+      return;
+    }
     iteration++;
     const spinner = createSpinner();
     spinner.start();
@@ -432,6 +487,7 @@ async function agentLoop(provider, messages, config, trustConfig) {
       let firstChunk = true;
       rawResponse = await provider.streamChat(messages, {
         onThinking: (chunk) => {
+          if (cancellation.value) return;  // silent: don't print more
           if (firstChunk) {
             spinner.stop();
             process.stdout.write('\n');
@@ -444,6 +500,7 @@ async function agentLoop(provider, messages, config, trustConfig) {
           process.stdout.write(chalk.gray(chunk));
         },
         onContent: (chunk) => {
+          if (cancellation.value) return;  // silent: don't print more
           if (firstChunk) {
             spinner.stop();
             process.stdout.write('\n');
@@ -460,6 +517,12 @@ async function agentLoop(provider, messages, config, trustConfig) {
       const normalized = normalizeAssistantResponse(rawResponse);
       fullResponse = normalized.text;
 
+      if (cancellation.value) {
+        spinner.stop();
+        cancel('Task cancelled mid-response. Conversation preserved.');
+        return;
+      }
+
       if (firstChunk) {
         spinner.stop();
         process.stdout.write('\n' + chalk.white(fullResponse));
@@ -469,13 +532,14 @@ async function agentLoop(provider, messages, config, trustConfig) {
       console.log('\n');
     } catch (err) {
       spinner.stop();
+      // Cancellation can surface as a fetch abort — treat it as a clean cancel.
+      if (cancellation.value) {
+        cancel('Task cancelled. Conversation preserved.');
+        return;
+      }
       warn(`Error: ${err.message}\n`);
       // Rewind everything added since the user's input so the conversation
       // isn't left with an unanswered tool-result or half-finished turn.
-      // On iteration 1 this drops the user's failed input (old behavior).
-      // On iteration >= 2 this drops the last tool-result user message plus
-      // any prior assistant/tool-result pairs from this turn — callers can
-      // retry with the original user prompt intact earlier in history.
       if (messages.length > baselineLen) {
         messages.length = baselineLen;
       } else {
@@ -493,10 +557,6 @@ async function agentLoop(provider, messages, config, trustConfig) {
     const hallucinatedToolResult = parsed.hallucinatedToolResult;
     messages.push(normalized.assistantMessage);
 
-    // Model invented a <tool_result> block without actually emitting a tool
-    // call — common failure mode on smaller models (gpt-oss:20b etc.). Inject
-    // a correction as the next user turn and loop, instead of silently
-    // accepting the fake result.
     if (hallucinatedToolResult && toolCalls.length === 0) {
       warn('Model hallucinated a <tool_result> block. Injecting correction.\n');
       messages.push({
@@ -515,15 +575,19 @@ async function agentLoop(provider, messages, config, trustConfig) {
       continue;
     }
 
-    // No tool calls — we're done
     if (toolCalls.length === 0) {
       saveHistory(messages);
       return;
     }
 
-    // Execute tool calls
+    // Execute tool calls (check cancellation between each so Esc feels snappy).
     const results = [];
+    let cancelledMidTools = false;
     for (const tc of toolCalls) {
+      if (cancellation.value) {
+        cancelledMidTools = true;
+        break;
+      }
       console.log(chalk.cyan(`  ⚙ ${tc.name}`) + chalk.gray(` ${formatToolArgs(tc.args)}`));
 
       const result = await executeTool(tc, trustConfig, config);
@@ -536,6 +600,12 @@ async function agentLoop(provider, messages, config, trustConfig) {
       }
 
       results.push({ tool: tc.name, toolCallId: tc.id, result });
+    }
+
+    if (cancelledMidTools) {
+      // Drop the partial assistant turn + any tool results we already added.
+      cancel('Task cancelled mid-execution. Conversation preserved.');
+      return;
     }
 
     // Feed tool results back to the AI
@@ -557,17 +627,17 @@ async function agentLoop(provider, messages, config, trustConfig) {
     // Continue the loop so the AI can process results and potentially call more tools
   }
 
-  warn('Agent reached maximum iterations. Stopping.');
-  // The last assistant message very likely contains unexecuted tool_calls.
-  // Append a synthetic tool-result-style notice so history stays coherent
-  // (assistant-with-tools -> user-tool-result) and the next session can
-  // continue without the model re-issuing the same pending calls.
-  const last = messages[messages.length - 1];
-  if (last && last.role === 'assistant') {
-    messages.push({
-      role: 'user',
-      content: '<tool_result name="__system__">\n{"interrupted": "agent reached maximum iterations (' + MAX_ITERATIONS + ') — tool calls above were not executed"}\n</tool_result>',
-    });
+  // Hit maxIterations (only reachable if a non-Infinity cap is set). Append
+  // a synthetic notice so history stays coherent and the next session can
+  // pick up cleanly.
+  if (Number.isFinite(MAX_ITERATIONS)) {
+    const last = messages[messages.length - 1];
+    if (last && last.role === 'assistant') {
+      messages.push({
+        role: 'user',
+        content: `<tool_result name="__system__">\n{"interrupted": "agent reached maxIterations (${MAX_ITERATIONS}) — tool calls above were not executed"}\n</tool_result>`,
+      });
+    }
   }
   saveHistory(messages);
 }
