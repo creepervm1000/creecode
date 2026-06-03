@@ -1,4 +1,4 @@
-import { readFile, writeFile, editFile, listDirectory } from './files.js';
+import { readFile, writeFile, editFile, listDirectory, readFileLines, fileHash, diffFiles, findReplace } from './files.js';
 import { runCommand } from './commands.js';
 import { grepText, globFiles, fileStat } from './search.js';
 import { moveFile, copyFile, deleteFile, makeDirectory } from './fs_ops.js';
@@ -13,6 +13,11 @@ import { addTodo, listTodos, updateTodo, deleteTodo, clearTodos } from './todo.j
 import { getEnv } from './env.js';
 import { getDiscordUserInfo } from './discord_info.js';
 import { getTelegramUserInfo, getTelegramChatInfo } from './telegram_info.js';
+import { webSearch, webFetch, webExtractLinks, webExtractMeta } from './web.js';
+import { base64Encode, base64Decode, hashText, urlEncode, urlDecode, jsonFormat, jsonValidate, uuidGenerate, randomString, jwtDecode, regexTest } from './text.js';
+import { csvParse, csvRead, yamlRead, tomlRead } from './data.js';
+import { currentTime, cronNext } from './time.js';
+import { osInfo, projectTree, diskUsage } from './system.js';
 import { allowOutsideWorkspace, getWorkspaceRoot } from '../workspace.js';
 
 export const TOOL_DEFINITIONS = [
@@ -77,7 +82,60 @@ export const TOOL_DEFINITIONS = [
     parameters: { userId: { type: "string", description: "Telegram user ID (numeric)", required: true } } },
   { name: "get_telegram_chat", description: "Look up a Telegram chat/group info by ID", category: "telegram", handler: getTelegramChatInfo,
     parameters: { chatId: { type: "string", description: "Telegram chat ID (numeric)", required: true } } },
-];
+  { name: 'web_search', description: 'Search the web via pluggable backends (auto falls through: searxng -> ddg -> bing -> wikipedia)', category: 'web', handler: webSearch,
+    parameters: { query: { type: 'string', required: true, description: 'Search query' }, limit: { type: 'number', required: false, description: 'Max results (1-50, default 10)' }, backend: { type: 'string', required: false, description: '"auto" (default) | "wikipedia" | "ddg" | "bing" | "searxng"' } } },
+  { name: 'web_fetch', description: 'Fetch a URL and convert HTML to readable text or markdown', category: 'web', handler: webFetch,
+    parameters: { url: { type: 'string', required: true, description: 'URL to fetch' }, format: { type: 'string', required: false, description: '"text", "markdown", or "html" (default text)' }, timeout: { type: 'number', required: false, description: 'Timeout in ms' }, max_bytes: { type: 'number', required: false, description: 'Cap response size' } } },
+  { name: 'web_extract_links', description: 'Fetch a URL and extract all <a href> links (internal/external)', category: 'web', handler: webExtractLinks,
+    parameters: { url: { type: 'string', required: true, description: 'URL' }, timeout: { type: 'number', required: false, description: 'Timeout in ms' } } },
+  { name: 'web_extract_meta', description: 'Fetch a URL and extract <title>, meta description, og:* / twitter:* tags, canonical, lang, headings', category: 'web', handler: webExtractMeta,
+    parameters: { url: { type: 'string', required: true, description: 'URL' }, timeout: { type: 'number', required: false, description: 'Timeout in ms' } } },
+  { name: 'base64_encode', description: 'Base64 / base64url encode a string', category: 'text', handler: base64Encode,
+    parameters: { input: { type: 'string', required: true, description: 'String to encode' }, input_encoding: { type: 'string', required: false, description: 'utf-8 | latin1 | hex (default utf-8)' }, url_safe: { type: 'boolean', required: false, description: 'Use base64url alphabet' } } },
+  { name: 'base64_decode', description: 'Base64 / base64url decode to a string', category: 'text', handler: base64Decode,
+    parameters: { input: { type: 'string', required: true, description: 'String to decode' }, output_encoding: { type: 'string', required: false, description: 'utf-8 | latin1 | hex | base64 (default utf-8)' }, url_safe: { type: 'boolean', required: false, description: 'Treat input as base64url' } } },
+  { name: 'hash_text', description: 'Hash a string (md5, sha1, sha224, sha256, sha384, sha512)', category: 'text', handler: hashText,
+    parameters: { input: { type: 'string', required: true, description: 'String to hash' }, algorithm: { type: 'string', required: false, description: 'Hash algo (default sha256)' }, encoding: { type: 'string', required: false, description: 'Input encoding: utf-8 | latin1 | hex (default utf-8)' } } },
+  { name: 'url_encode', description: 'Percent-encode a string (URI or URI-component)', category: 'text', handler: urlEncode,
+    parameters: { input: { type: 'string', required: true, description: 'String to encode' }, component: { type: 'boolean', required: false, description: 'true=encodeURIComponent, false=encodeURI (default true)' } } },
+  { name: 'url_decode', description: 'Percent-decode a string (URI or URI-component)', category: 'text', handler: urlDecode,
+    parameters: { input: { type: 'string', required: true, description: 'String to decode' }, component: { type: 'boolean', required: false, description: 'true=decodeURIComponent, false=decodeURI (default true)' } } },
+  { name: 'json_format', description: 'Pretty-print JSON (or report invalid)', category: 'text', handler: jsonFormat,
+    parameters: { input: { type: 'string', required: true, description: 'JSON string' }, indent: { type: 'number', required: false, description: 'Indent spaces (default 2)' } } },
+  { name: 'json_validate', description: 'Validate a JSON string and report type/shape', category: 'text', handler: jsonValidate,
+    parameters: { input: { type: 'string', required: true, description: 'JSON string' } } },
+  { name: 'uuid', description: 'Generate a random UUID v4 (RFC 4122)', category: 'text', handler: uuidGenerate, parameters: {} },
+  { name: 'random_string', description: 'Generate a random string from a chosen alphabet', category: 'text', handler: randomString,
+    parameters: { length: { type: 'number', required: false, description: 'Length (1-1024, default 16)' }, alphabet: { type: 'string', required: false, description: 'alphanumeric | alpha | numeric | hex | base64 | base64url' } } },
+  { name: 'jwt_decode', description: 'Decode a JWT header/payload/signature (no signature verification)', category: 'text', handler: jwtDecode,
+    parameters: { token: { type: 'string', required: true, description: 'JWT' } } },
+  { name: 'regex_test', description: 'Test a regex against an input string; returns matches and groups', category: 'text', handler: regexTest,
+    parameters: { pattern: { type: 'string', required: true, description: 'Regex pattern' }, input: { type: 'string', required: true, description: 'String to test' }, flags: { type: 'string', required: false, description: 'Regex flags (default none)' } } },
+  { name: 'csv_parse', description: 'Parse a CSV string into records', category: 'data', handler: csvParse,
+    parameters: { input: { type: 'string', required: true, description: 'CSV text' }, delimiter: { type: 'string', required: false, description: 'Field delimiter (default ",")' }, has_header: { type: 'boolean', required: false, description: 'Treat first row as header (default true)' }, infer_types: { type: 'boolean', required: false, description: 'Coerce numbers/booleans/null' } } },
+  { name: 'csv_read', description: 'Read a workspace CSV file into records', category: 'data', handler: csvRead,
+    parameters: { path: { type: 'string', required: true, description: 'Workspace path' }, delimiter: { type: 'string', required: false, description: 'Field delimiter' }, has_header: { type: 'boolean', required: false, description: 'Treat first row as header (default true)' }, infer_types: { type: 'boolean', required: false, description: 'Coerce numbers/booleans/null' } } },
+  { name: 'yaml_read', description: 'Read a workspace YAML file (flat / shallow nested)', category: 'data', handler: yamlRead,
+    parameters: { path: { type: 'string', required: true, description: 'Workspace path to .yaml/.yml' } } },
+  { name: 'toml_read', description: 'Read a workspace TOML file (sections + flat key=value)', category: 'data', handler: tomlRead,
+    parameters: { path: { type: 'string', required: true, description: 'Workspace path to .toml' } } },
+  { name: 'current_time', description: 'Get the current time in a given timezone (default UTC)', category: 'time', handler: currentTime,
+    parameters: { timezone: { type: 'string', required: false, description: 'IANA tz name (default UTC)' }, now: { type: 'string', required: false, description: 'ISO timestamp to format (default now)' } } },
+  { name: 'cron_next', description: 'Calculate the next N runs of a 5-field cron expression (UTC)', category: 'time', handler: cronNext,
+    parameters: { expression: { type: 'string', required: true, description: 'Cron expression (minute hour day month weekday)' }, count: { type: 'number', required: false, description: 'How many future runs (1-100, default 5)' }, now: { type: 'string', required: false, description: 'ISO timestamp to compute from (default now)' } } },
+  { name: 'os_info', description: 'Report host, kernel, node, CPUs, memory, NICs, workspace root', category: 'system', handler: osInfo, parameters: {} },
+  { name: 'project_tree', description: 'Render a directory tree (skipping .git/node_modules/dist/...)', category: 'system', handler: projectTree,
+    parameters: { path: { type: 'string', required: false, description: 'Root path (default workspace root)' }, max_depth: { type: 'number', required: false, description: 'Max depth (default 5)' }, ignore: { type: 'array', required: false, description: 'Additional names to ignore' } } },
+  { name: 'disk_usage', description: 'Total file/dir/byte count under a path', category: 'system', handler: diskUsage,
+    parameters: { path: { type: 'string', required: false, description: 'Root path (default workspace root)' } } },
+  { name: 'read_file_lines', description: 'Read a specific line range from a file', category: 'files', handler: readFileLines,
+    parameters: { path: { type: 'string', required: true, description: 'Workspace path' }, start: { type: 'number', required: false, description: '1-based start line (default 1)' }, end: { type: 'number', required: false, description: '1-based end line (default: end of file)' } } },
+  { name: 'file_hash', description: 'Hash a workspace file (md5/sha1/sha256/...)', category: 'files', handler: fileHash,
+    parameters: { path: { type: 'string', required: true, description: 'Workspace path' }, algorithm: { type: 'string', required: false, description: 'md5 | sha1 | sha256 | sha384 | sha512 (default sha256)' } } },
+  { name: 'diff_files', description: 'Unified diff between two workspace files', category: 'files', handler: diffFiles,
+    parameters: { path_a: { type: 'string', required: true, description: 'First path' }, path_b: { type: 'string', required: true, description: 'Second path' } } },
+  { name: 'find_replace', description: 'Regex find-and-replace across files under a path', category: 'files', handler: findReplace,
+    parameters: { pattern: { type: 'string', required: true, description: 'Regex pattern' }, replacement: { type: 'string', required: true, description: 'Replacement string ($1, $2, ... supported)' }, path: { type: 'string', required: false, description: 'Root path (default workspace root)' }, file_glob: { type: 'string', required: false, description: 'Restrict to files matching this glob' }, flags: { type: 'string', required: false, description: 'Regex flags (default "g")' }, dry_run: { type: 'boolean', required: false, description: 'If true, do not write changes' } } },
 ];
 
 const TOOL_CALL_MODE_DESCRIPTIONS = {

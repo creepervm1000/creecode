@@ -18,7 +18,7 @@ export const DEFAULT_CONFIG = {
   systemPromptAppendix: '',
   toolCallMode: 'xml',
 
-  maxIterations: 25,
+  maxIterations: Infinity, // No cap. Cap-free agent loop.
   historyMaxMessages: 200,
   autoCompactHistory: true,
 
@@ -28,6 +28,8 @@ export const DEFAULT_CONFIG = {
   networkMaxBytes: 200000,
   networkAllowHosts: [],
   networkDenyHosts: ['169.254.169.254', 'metadata.google.internal'],
+
+  searchInstance: null,
 
   disabledTools: [],
   enabledTools: null,
@@ -40,6 +42,11 @@ export const DEFAULT_CONFIG = {
     process: 'prompt-trust',
     notes: 'full-trust',
     meta: 'full-trust',
+    web: 'prompt-trust',
+    text: 'full-trust',
+    data: 'agent-decides-trust',
+    time: 'full-trust',
+    system: 'agent-decides-trust',
   },
 
   theme: 'dark',

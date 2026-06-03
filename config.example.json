@@ -18,11 +18,17 @@
     "git": "prompt-trust",
     "process": "prompt-trust",
     "notes": "full-trust",
-    "meta": "full-trust"
+    "meta": "full-trust",
+    "web": "prompt-trust",
+    "text": "full-trust",
+    "data": "agent-decides-trust",
+    "time": "full-trust",
+    "system": "agent-decides-trust"
   },
   "temperature": 0.2,
   "maxTokens": 4096,
   "allowOutsideWorkspace": false,
   "disabledTools": [],
+  "searchInstance": null,
   "systemPromptAppendix": ""
 }

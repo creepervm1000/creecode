@@ -17,6 +17,11 @@ export const TRUST_CATEGORIES = {
   process:  'Process / Env',
   notes:    'Scratchpad Notes',
   meta:     'Meta / Think',
+  web:      'Web Search / Fetch',
+  text:     'Text / Encoding / Hashing',
+  data:     'CSV / YAML / TOML',
+  time:     'Time / Cron',
+  system:   'System Info / Project Tree',
 };
 
 export async function checkTrust(category, trustLevel, description, isSafe = false) {
