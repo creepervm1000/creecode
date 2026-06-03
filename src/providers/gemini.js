@@ -86,7 +86,7 @@ export class GeminiProvider extends BaseProvider {
 
     const url = `${this.baseUrl}/v1beta/models/${this.model}:streamGenerateContent?alt=sse&key=${this.apiKey}`;
 
-    const res = await this.fetchFn(url, {
+    const res = await this.fetchWithRetry(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),

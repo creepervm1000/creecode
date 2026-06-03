@@ -65,7 +65,7 @@ export class AnthropicProvider extends BaseProvider {
     };
     if (system) body.system = system;
 
-    const res = await this.fetchFn(`${this.baseUrl}/v1/messages`, {
+    const res = await this.fetchWithRetry(`${this.baseUrl}/v1/messages`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

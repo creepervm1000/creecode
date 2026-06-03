@@ -125,7 +125,7 @@ export class OpenAIProvider extends BaseProvider {
       return parsed;
     }
 
-    const res = await this.fetchFn(`${this.baseUrl}/chat/completions`, {
+    const res = await this.fetchWithRetry(`${this.baseUrl}/chat/completions`, {
       method: 'POST',
       headers: this.buildHeaders(),
       body: JSON.stringify(this.buildPayload(messages, { stream: true })),

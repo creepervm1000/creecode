@@ -95,7 +95,7 @@ export class OllamaProvider extends BaseProvider {
   }
 
   async streamChat(messages, onChunk) {
-    const res = await this.fetchFn(`${this.baseUrl}/api/chat`, {
+    const res = await this.fetchWithRetry(`${this.baseUrl}/api/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(this.buildPayload(messages, { stream: true })),

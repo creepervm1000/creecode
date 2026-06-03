@@ -107,7 +107,7 @@ export class HuggingFaceProvider extends BaseProvider {
       return parsed;
     }
 
-    const res = await this.fetchFn(url, {
+    const res = await this.fetchWithRetry(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
