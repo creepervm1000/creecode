@@ -11,7 +11,7 @@ import { buildToolsPrompt, buildToolModeSystemPrompt, parseToolCalls, executeToo
 import { TRUST_LEVELS, TRUST_CATEGORIES } from './trust.js';
 import { saveConfig, loadConfig } from './config.js';
 import { setRawMode } from './utils/terminal.js';
-import { createProvider, getProviderChoices, PROVIDERS, codexLogin, codexLogout, codexStatus, copilotStatus, copilotSetToken, copilotLogout } from './providers/index.js';
+import { createProvider, getProviderChoices, PROVIDERS, codexLogin, codexLogout, codexStatus, copilotStatus, copilotLogout, startGitHubCopilotAuth } from './providers/index.js';
 import { showSidebar, clearSidebar, canShowSidebar, loadTodos, MIN_WIDTH } from './utils/sidebar.js';
 import { subagentManager } from './subagent.js';
 import { discoverSkills, initSkillDir, clearRuntimeTools, registerRuntimeTool } from './tools/index.js';
@@ -1042,7 +1042,7 @@ async function handleCommand(input, messages, config, provider, rl, trustConfig,
 
     case '/login': {
       const arg = input.slice('/login'.length).trim();
-      if (!arg) { warn('usage: /login codex | /login copilot [--token <github_token>]\n'); break; }
+      if (!arg) { warn('usage: /login codex | /login copilot\n'); break; }
       if (arg === 'codex') {
         const spinner = createSpinner();
         spinner.start();
@@ -1052,18 +1052,22 @@ async function handleCommand(input, messages, config, provider, rl, trustConfig,
           success(`Logged in to Codex as ${r.email || 'unknown user'}.\n`);
         } catch (e) { spinner.stop(); warn(`Codex login failed: ${e.message}\n`); }
       } else if (arg === 'copilot') {
-        // /login copilot [--token <token>]  — if --token given, set directly.
-        // Otherwise prompt for a GitHub token.
-        const rest = input.slice('/login copilot'.length).trim();
-        let token = null;
-        if (rest.startsWith('--token')) {
-          token = rest.replace(/^--token\s+/, '').trim();
+        // GitHub OAuth Device Flow (RFC 8628). Copilot API only accepts
+        // tokens from GitHub OAuth apps with the `copilot` scope, not
+        // personal access tokens.
+        info('Requesting device code from GitHub...');
+        let prompt;
+        const result = await startGitHubCopilotAuth({
+          onPrompt: (p) => { prompt = p; },
+        });
+        if (prompt) {
+          console.log();
+          info('To finish signing in to GitHub Copilot, open:');
+          info(`  ${chalk.cyan(prompt.verifyUrl)}`);
+          info(`and enter the code:  ${chalk.bold(prompt.userCode)}`);
+          info('(polling for authorization...)');
         }
-        if (!token) {
-          token = await input({ message: 'GitHub token (needs Copilot access, e.g. from `gh auth token`):', validate: v => v.length > 0 || 'required' });
-        }
-        const r = copilotSetToken(token, 'manual');
-        if (r.ok) success(`Copilot token set.\n`); else warn(`Failed: ${r.error}\n`);
+        success(`Logged in to GitHub Copilot (scope: ${result.scope || 'copilot'}).\n`);
       } else {
         warn(`Unknown provider "${arg}". Supported: codex, copilot\n`);
       }
@@ -1270,12 +1274,21 @@ async function editProvider(config, provider, trustConfig, onProviderChange, onS
         if (r) success(`Logged in to ${providerDef.name} as ${r.email || 'user'}.\n`);
       } catch (e) { warn(`OAuth login failed: ${e.message}\n`); }
     }
-  } else if (providerDef.auth === 'github-token') {
-    if (!(await confirm({ message: `Set GitHub token for ${providerDef.name} now?`, default: true }))) {
+  } else if (providerDef.auth === 'oauth-device') {
+    if (!(await confirm({ message: `Run OAuth device flow for ${providerDef.name} now?`, default: true }))) {
       nextConfig.apiKey = '';
     } else {
-      const token = await input({ message: 'GitHub token (needs Copilot access):', validate: v => v.length > 0 || 'required' });
-      copilotSetToken(token, 'manual');
+      try {
+        let prompt;
+        const r = await startGitHubCopilotAuth({ onPrompt: (p) => { prompt = p; } });
+        if (prompt) {
+          console.log();
+          info('Open this URL to authorize:');
+          info(`  ${chalk.cyan(prompt.verifyUrl)}`);
+          info(`and enter code:  ${chalk.bold(prompt.userCode)}`);
+        }
+        success(`Logged in to ${providerDef.name} (scope: ${r.scope || 'copilot'}).\n`);
+      } catch (e) { warn(`OAuth login failed: ${e.message}\n`); }
     }
   } else {
     nextConfig.apiKey = '';
@@ -1315,8 +1328,8 @@ async function editAuth() {
   const action = await select({
     message: 'Action:',
     choices: [
-      { name: 'Login to Codex (OAuth)', value: 'login-codex' },
-      { name: 'Set Copilot token', value: 'set-copilot' },
+      { name: 'Login to Codex (OAuth browser flow)', value: 'login-codex' },
+      { name: 'Login to GitHub Copilot (device flow)', value: 'login-copilot' },
       { name: 'Logout Codex', value: 'logout-codex' },
       { name: 'Logout Copilot', value: 'logout-copilot' },
       { name: 'Cancel', value: 'cancel' },
@@ -1327,10 +1340,19 @@ async function editAuth() {
     spinner.start();
     try { const r = await codexLogin({ open: true }); spinner.stop(); success(`Logged in as ${r.email || 'user'}.\n`); }
     catch (e) { spinner.stop(); warn(`Login failed: ${e.message}\n`); }
-  } else if (action === 'set-copilot') {
-    const token = await input({ message: 'GitHub token:', validate: v => v.length > 0 || 'required' });
-    copilotSetToken(token, 'manual');
-    success('Copilot token set.\n');
+  } else if (action === 'login-copilot') {
+    info('Requesting device code from GitHub...');
+    let prompt;
+    try {
+      const r = await startGitHubCopilotAuth({ onPrompt: (p) => { prompt = p; } });
+      if (prompt) {
+        console.log();
+        info('Open this URL to authorize:');
+        info(`  ${chalk.cyan(prompt.verifyUrl)}`);
+        info(`and enter code:  ${chalk.bold(prompt.userCode)}`);
+      }
+      success(`Logged in to GitHub Copilot (scope: ${r.scope || 'copilot'}).\n`);
+    } catch (e) { warn(`Login failed: ${e.message}\n`); }
   } else if (action === 'logout-codex') { codexLogout(); success('Logged out of Codex.\n'); }
   else if (action === 'logout-copilot') { copilotLogout(); success('Copilot token cleared.\n'); }
 }

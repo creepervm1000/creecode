@@ -4,7 +4,7 @@ import { GeminiProvider } from './gemini.js';
 import { OllamaProvider } from './ollama.js';
 import { HuggingFaceProvider } from './huggingface.js';
 import { CodexProvider, codexLogin, codexLogout, codexStatus } from './codex.js';
-import { CopilotProvider, copilotStatus, copilotSetToken, copilotLogout } from './copilot.js';
+import { GitHubCopilotProvider, startGitHubCopilotAuth, copilotStatus, copilotLogout } from './github_copilot.js';
 
 /**
  * Provider registry — maps provider IDs to their class and default config.
@@ -120,16 +120,16 @@ export const PROVIDERS = {
   },
   copilot: {
     name: 'GitHub Copilot',
-    class: CopilotProvider,
+    class: GitHubCopilotProvider,
     baseUrl: 'https://api.githubcopilot.com',
     defaultModel: 'gpt-4o',
-    needsKey: false,  // github token
-    auth: 'github-token',
+    needsKey: false,  // OAuth device flow
+    auth: 'oauth-device',
   },
 };
 
 // Re-export auth helpers so the REPL can wire /login /logout commands.
-export { codexLogin, codexLogout, codexStatus, copilotStatus, copilotSetToken, copilotLogout };
+export { codexLogin, codexLogout, codexStatus, startGitHubCopilotAuth, copilotStatus, copilotLogout };
 
 /**
  * Get a list of provider choices for the onboarding prompt.
