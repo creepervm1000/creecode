@@ -3,6 +3,10 @@ import { AnthropicProvider } from './anthropic.js';
 import { GeminiProvider } from './gemini.js';
 import { OllamaProvider } from './ollama.js';
 import { HuggingFaceProvider } from './huggingface.js';
+import { OpenAICodexProvider, startOpenAICodexAuth } from './openai_codex.js';
+import { GitHubCopilotProvider, startGitHubCopilotAuth } from './github_copilot.js';
+import { CodexProvider, codexLogin, codexLogout, codexStatus } from './codex.js';
+import { CopilotProvider, copilotStatus, copilotSetToken, copilotLogout } from './copilot.js';
 
 /**
  * Provider registry — maps provider IDs to their class and default config.
@@ -108,7 +112,26 @@ export const PROVIDERS = {
     needsKey: true,
     custom: true,
   },
+  codex: {
+    name: 'OpenAI Codex (OAuth)',
+    class: CodexProvider,
+    baseUrl: 'https://api.openai.com/v1',
+    defaultModel: 'gpt-5-codex',
+    needsKey: false,  // OAuth instead
+    auth: 'oauth',
+  },
+  copilot: {
+    name: 'GitHub Copilot',
+    class: CopilotProvider,
+    baseUrl: 'https://api.githubcopilot.com',
+    defaultModel: 'gpt-4o',
+    needsKey: false,  // github token
+    auth: 'github-token',
+  },
 };
+
+// Re-export auth helpers so the REPL can wire /login /logout commands.
+export { codexLogin, codexLogout, codexStatus, copilotStatus, copilotSetToken, copilotLogout };
 
 /**
  * Get a list of provider choices for the onboarding prompt.
@@ -138,5 +161,9 @@ export function createProvider(config) {
     baseUrl: config.baseUrl || providerDef.baseUrl,
     fetchFn: config.fetchFn || globalThis.fetch,
     toolCallMode: config.toolCallMode || 'xml',
+    retryDelayMs: config.retryDelayMs,
+    retryAttempts: config.retryAttempts,
   });
 }
+
+export { startOpenAICodexAuth, startGitHubCopilotAuth };

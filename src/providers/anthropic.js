@@ -112,4 +112,32 @@ export class AnthropicProvider extends BaseProvider {
 
     return full;
   }
+
+  async listModels() {
+    try {
+      const res = await this.fetchWithRetry(`${this.baseUrl}/v1/models`, {
+        headers: { 'x-api-key': this.apiKey, 'anthropic-version': '2023-06-01' },
+      });
+      if (!res.ok) return [];
+      const data = await res.json();
+      return (data.data || []).map(m => ({
+        id: m.id,
+        display_name: m.display_name || null,
+        tags: deriveAnthropicTags(m.id),
+      }));
+    } catch { return []; }
+  }
+}
+
+function deriveAnthropicTags(id) {
+  if (!id) return [];
+  const tags = [];
+  if (id.includes('opus')) tags.push('opus', 'flagship');
+  else if (id.includes('sonnet')) tags.push('sonnet', 'mid');
+  else if (id.includes('haiku')) tags.push('haiku', 'small');
+  if (id.includes('claude-3-5') || id.includes('claude-3.5')) tags.push('claude-3.5');
+  else if (id.includes('claude-3')) tags.push('claude-3');
+  else if (id.includes('claude-4') || id.includes('claude-sonnet-4') || id.includes('claude-opus-4')) tags.push('claude-4');
+  if (id.includes('vision')) tags.push('vision');
+  return tags;
 }

@@ -170,4 +170,35 @@ export class OpenAIProvider extends BaseProvider {
 
     return full;
   }
+
+  // List available models via the /models endpoint. Returns an array of
+  // { id, owned_by, tags }. Subclasses can override for richer data.
+  async listModels() {
+    try {
+      const res = await this.fetchWithRetry(`${this.baseUrl}/models`, {
+        headers: { 'Authorization': `Bearer ${this.apiKey}` },
+      });
+      if (!res.ok) return [];
+      const data = await res.json();
+      return (data.data || []).map(m => ({
+        id: m.id,
+        owned_by: m.owned_by || null,
+        tags: deriveOpenAiTags(m.id),
+        created: m.created || null,
+      }));
+    } catch { return []; }
+  }
+}
+
+export function deriveOpenAiTags(id) {
+  if (!id) return [];
+  const tags = [];
+  if (id.includes('codex')) tags.push('codex');
+  if (id.includes('vision') || id.includes('gpt-4o') || id.includes('gpt-4-turbo')) tags.push('vision');
+  if (/^o\d|^o1|^o3/.test(id)) tags.push('reasoning');
+  if (id.includes('mini') || id.includes('nano')) tags.push('small');
+  if (id.includes('gpt-4o')) tags.push('flagship');
+  if (id.includes('gpt-3.5')) tags.push('legacy');
+  if (id.includes('instruct') || id.includes('davinci') || id.includes('curie') || id.includes('babbage')) tags.push('instruct');
+  return tags;
 }

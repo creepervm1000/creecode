@@ -132,4 +132,34 @@ export class GeminiProvider extends BaseProvider {
 
     return full;
   }
+
+  async listModels() {
+    try {
+      const url = `${this.baseUrl}/v1beta/models?key=${encodeURIComponent(this.apiKey)}&pageSize=200`;
+      const res = await this.fetchWithRetry(url);
+      if (!res.ok) return [];
+      const data = await res.json();
+      return (data.models || []).map(m => {
+        const id = (m.name || '').replace(/^models\//, '');
+        return {
+          id,
+          display_name: m.displayName || null,
+          tags: deriveGeminiTags(id, m),
+          input_token_limit: m.inputTokenLimit || null,
+          output_token_limit: m.outputTokenLimit || null,
+        };
+      });
+    } catch { return []; }
+  }
+}
+
+function deriveGeminiTags(id, raw) {
+  const tags = [];
+  if (id.includes('flash')) tags.push('flash', 'fast');
+  if (id.includes('pro')) tags.push('pro', 'flagship');
+  if (id.includes('nano')) tags.push('nano', 'small');
+  if (id.includes('lite')) tags.push('lite');
+  if (raw?.supportedGenerationMethods?.includes('generateContent')) tags.push('chat');
+  if (raw?.supportedGenerationMethods?.includes('embedContent')) tags.push('embed');
+  return tags;
 }

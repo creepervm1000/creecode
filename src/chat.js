@@ -11,7 +11,7 @@ import { buildToolsPrompt, buildToolModeSystemPrompt, parseToolCalls, executeToo
 import { TRUST_LEVELS, TRUST_CATEGORIES } from './trust.js';
 import { saveConfig, loadConfig } from './config.js';
 import { setRawMode } from './utils/terminal.js';
-import { createProvider, getProviderChoices, PROVIDERS } from './providers/index.js';
+import { createProvider, getProviderChoices, PROVIDERS, codexLogin, codexLogout, codexStatus, copilotStatus, copilotSetToken, copilotLogout } from './providers/index.js';
 import { showSidebar, clearSidebar, canShowSidebar, loadTodos, MIN_WIDTH } from './utils/sidebar.js';
 import { subagentManager } from './subagent.js';
 import { discoverSkills, initSkillDir, clearRuntimeTools, registerRuntimeTool } from './tools/index.js';
@@ -207,6 +207,8 @@ const COMMANDS = {
   '/deny': 'Deny a pending request (usage: /deny <request_id>)',
   '/init-skill': 'Create an example skill in ~/.creecode/skills/example-hello',
   '/refresh-skills': 'Re-scan ~/.creecode/skills and register newly added ones',
+  '/login': 'Log in to a provider (usage: /login codex|copilot)',
+  '/logout': 'Log out of a provider (usage: /logout codex|copilot)',
   '/exit': 'Exit CreeCode',
 };
 
@@ -274,29 +276,52 @@ async function chooseModelFromProvider(providerId, providerDef, config) {
     });
   }
 
-  if (providerId === 'gemini') {
-    info('Checking Gemini models available to your API key...');
+  // Generic path: ask the provider's class to list models (works for
+  // OpenAI, Anthropic, Gemini, Codex, Copilot, etc.). Falls back to
+  // manual input if the endpoint is unavailable or returns nothing.
+  if (!providerDef.custom) {
+    info(`Fetching model list for ${providerDef.name}...`);
     try {
-      const geminiProvider = new providerDef.class({
+      const tmpProvider = new providerDef.class({
         apiKey: config.apiKey || '',
         baseUrl: config.baseUrl || providerDef.baseUrl,
+        model: config.model || providerDef.defaultModel,
         fetchFn: globalThis.fetch,
+        toolCallMode: config.toolCallMode || 'xml',
       });
-      const models = await geminiProvider.listModels();
+      const models = await tmpProvider.listModels();
       if (models.length > 0) {
-        return await select({
-          message: 'Select a Gemini model:',
-          choices: models.map(m => ({ name: m, value: m })),
-          default: models.includes(config.model) ? config.model : undefined,
+        // Sort so the most relevant / current models are at the top.
+        const sorted = [...models].sort((a, b) => {
+          const cur = (config.model || '').toLowerCase();
+          const ai = a.id.toLowerCase() === cur ? -2 : a.id.toLowerCase().includes(cur) ? -1 : 0;
+          const bi = b.id.toLowerCase() === cur ? -2 : b.id.toLowerCase().includes(cur) ? -1 : 0;
+          if (ai !== bi) return ai - bi;
+          return a.id.localeCompare(b.id);
         });
+        const choices = sorted.map(m => {
+          const tags = (m.tags || []).map(t => chalk.gray(`[${t}]`)).join(' ');
+          const display = m.display_name && m.display_name !== m.id ? `${m.id} — ${m.display_name}` : m.id;
+          return { name: tags ? `${display} ${tags}` : display, value: m.id };
+        });
+        choices.push({ name: chalk.yellow('— enter model name manually —'), value: '__manual__' });
+        const pick = await select({
+          message: `Select a model (${models.length} available):`,
+          choices,
+          default: sorted[0]?.id,
+        });
+        if (pick === '__manual__') {
+          return await input({
+            message: 'Enter model name/ID:',
+            default: config.model || providerDef.defaultModel,
+            validate: (val) => val.length > 0 || 'Model name is required',
+          });
+        }
+        return pick;
       }
-    } catch {
-      // fall back to manual input below
+    } catch (e) {
+      warn(`Could not fetch model list (${e.message}). Falling back to manual entry.`);
     }
-    return await input({
-      message: 'Enter Gemini model name:',
-      default: config.model || providerDef.defaultModel,
-    });
   }
 
   if (providerDef.custom) {
@@ -1007,6 +1032,44 @@ async function handleCommand(input, messages, config, provider, rl, trustConfig,
       break;
     }
 
+    case '/login': {
+      const arg = input.slice('/login'.length).trim();
+      if (!arg) { warn('usage: /login codex | /login copilot [--token <github_token>]\n'); break; }
+      if (arg === 'codex') {
+        const spinner = createSpinner();
+        spinner.start();
+        try {
+          const r = await codexLogin({ open: true });
+          spinner.stop();
+          success(`Logged in to Codex as ${r.email || 'unknown user'}.\n`);
+        } catch (e) { spinner.stop(); warn(`Codex login failed: ${e.message}\n`); }
+      } else if (arg === 'copilot') {
+        // /login copilot [--token <token>]  — if --token given, set directly.
+        // Otherwise prompt for a GitHub token.
+        const rest = input.slice('/login copilot'.length).trim();
+        let token = null;
+        if (rest.startsWith('--token')) {
+          token = rest.replace(/^--token\s+/, '').trim();
+        }
+        if (!token) {
+          token = await input({ message: 'GitHub token (needs Copilot access, e.g. from `gh auth token`):', validate: v => v.length > 0 || 'required' });
+        }
+        const r = copilotSetToken(token, 'manual');
+        if (r.ok) success(`Copilot token set.\n`); else warn(`Failed: ${r.error}\n`);
+      } else {
+        warn(`Unknown provider "${arg}". Supported: codex, copilot\n`);
+      }
+      break;
+    }
+
+    case '/logout': {
+      const arg = input.slice('/logout'.length).trim();
+      if (arg === 'codex') { codexLogout(); success('Logged out of Codex.\n'); }
+      else if (arg === 'copilot') { copilotLogout(); success('Copilot token cleared.\n'); }
+      else warn('usage: /logout codex | /logout copilot\n');
+      break;
+    }
+
     case '/refresh-skills': {
       clearRuntimeTools();
       const list = discoverSkills(config);
@@ -1053,22 +1116,330 @@ async function handleCommand(input, messages, config, provider, rl, trustConfig,
 async function openSettings(config, provider, trustConfig, onProviderChange, onSystemPromptChange) {
   console.log(chalk.white.bold('\n  ⚙  Settings\n'));
 
-  const setting = await select({
-    message: 'What would you like to configure?',
+  // Loop so the user can configure multiple things in one visit.
+  for (;;) {
+    const cdx = codexStatus();
+    const cop = copilotStatus();
+    const setting = await select({
+      message: 'What would you like to configure?',
+      choices: [
+        { name: `Provider              [${config.provider}]`, value: 'provider' },
+        { name: `Model                 [${config.model || 'default'}]`, value: 'model' },
+        { name: `─── Auth ───`, value: '_sep_auth', disabled: true },
+        { name: `  Login/Logout        /login codex|copilot   (status: codex=${cdx.logged_in ? '✓' : '✗'} copilot=${cop.logged_in ? '✓' : '✗'})`, value: 'auth' },
+        { name: `─── Trust Levels ───`, value: '_sep_trust', disabled: true },
+        ...Object.entries(TRUST_CATEGORIES).map(([k, v]) => ({
+          name: `  ${v.padEnd(28)} [${trustConfig[k] || 'prompt-trust'}]`,
+          value: `trust:${k}`,
+        })),
+        { name: `─── Network ───`, value: '_sep_net', disabled: true },
+        { name: `  Network Timeout     [${config.networkTimeoutMs} ms]`, value: 'net:timeout' },
+        { name: `  Network Max Bytes   [${config.networkMaxBytes}]`, value: 'net:maxbytes' },
+        { name: `  Allowed Hosts       [${(config.networkAllowHosts || []).length || 'any'}]`, value: 'net:allow' },
+        { name: `  Denied Hosts        [${(config.networkDenyHosts || []).length}]`, value: 'net:deny' },
+        { name: `  Search Instance     [${config.searchInstance || '(none, auto)'} ]`, value: 'net:search' },
+        { name: `  Proxy               [${config.proxy || '(none)'}]`, value: 'net:proxy' },
+        { name: `─── Paths ───`, value: '_sep_path', disabled: true },
+        { name: `  Allow Outside Workspace  [${config.allowOutsideWorkspace}]`, value: 'path:outside' },
+        { name: `  Dangerous Paths Bypass  [${(config.dangerousPaths || []).length}]`, value: 'path:dangerous' },
+        { name: `  Memory File        [${config.memoryFile || '~/.creecode/memory.json'}]`, value: 'path:memory' },
+        { name: `  Skills Dir          [${config.skillsDir || '~/.creecode/skills'}]`, value: 'path:skills' },
+        { name: `─── Commands ───`, value: '_sep_cmd', disabled: true },
+        { name: `  Command Timeout     [${config.commandTimeoutMs} ms]`, value: 'cmd:timeout' },
+        { name: `  Command Max Output  [${config.commandMaxOutputBytes} bytes]`, value: 'cmd:maxout' },
+        { name: `─── Generation ───`, value: '_sep_gen', disabled: true },
+        { name: `  Temperature         [${config.temperature}]`, value: 'gen:temperature' },
+        { name: `  Top-P               [${config.topP}]`, value: 'gen:topp' },
+        { name: `  Max Tokens          [${config.maxTokens}]`, value: 'gen:maxtokens' },
+        { name: `  Tool Calling Mode   [${config.toolCallMode || 'xml'}]`, value: 'toolCallMode' },
+        { name: `─── System ───`, value: '_sep_sys', disabled: true },
+        { name: `  System Prompt Appendix  [${(config.systemPromptAppendix || '').slice(0, 40)}]`, value: 'sys:appendix' },
+        { name: `  History Max Messages     [${config.historyMaxMessages}]`, value: 'sys:historymax' },
+        { name: `  Auto-Compact History     [${config.autoCompactHistory}]`, value: 'sys:autocompact' },
+        { name: `─── Tools ───`, value: '_sep_tools', disabled: true },
+        { name: `  Disabled Tools     [${(config.disabledTools || []).length}]`, value: 'tools:disable' },
+        { name: `  Enabled Tools      [${config.enabledTools ? config.enabledTools.length : 'all'}]`, value: 'tools:enable' },
+        { name: 'Done', value: 'back' },
+      ],
+    });
+
+    if (setting === 'back') { console.log(); return; }
+
+    // Separators
+    if (typeof setting === 'string' && setting.startsWith('_sep_')) continue;
+
+    // Trust levels
+    if (setting.startsWith('trust:')) {
+      const k = setting.slice('trust:'.length);
+      await editTrustLevel(k, trustConfig, config, onSystemPromptChange);
+      continue;
+    }
+
+    // Settings key handlers
+    if (setting === 'provider') {
+      await editProvider(config, provider, trustConfig, onProviderChange, onSystemPromptChange);
+      continue;
+    }
+    if (setting === 'model') {
+      await editModel(config, provider, onProviderChange, onSystemPromptChange);
+      continue;
+    }
+    if (setting === 'auth') {
+      await editAuth();
+      continue;
+    }
+    if (setting === 'toolCallMode') {
+      await editToolCallMode(config, provider, trustConfig, onProviderChange, onSystemPromptChange);
+      continue;
+    }
+    if (setting.startsWith('net:')) await editNet(setting.slice(4), config);
+    else if (setting.startsWith('path:')) await editPath(setting.slice(5), config);
+    else if (setting.startsWith('cmd:')) await editCmd(setting.slice(4), config);
+    else if (setting.startsWith('gen:')) await editGen(setting.slice(4), config);
+    else if (setting.startsWith('sys:')) await editSys(setting.slice(4), config);
+    else if (setting.startsWith('tools:')) await editTools(setting.slice(6), config);
+    else warn(`Unhandled setting: ${setting}\n`);
+  }
+
+  // Unreachable — kept to satisfy linters that don't see the inner return.
+  console.log();
+}
+
+async function editTrustLevel(k, trustConfig, config, onSystemPromptChange) {
+  const newLevel = await select({
+    message: `Set trust level for ${TRUST_CATEGORIES[k]}:`,
+    choices: Object.entries(TRUST_LEVELS).map(([id, l]) => ({ name: `${l.name} — ${l.description}`, value: id })),
+    default: trustConfig[k] || 'prompt-trust',
+  });
+  trustConfig[k] = newLevel;
+  config.trust = { ...trustConfig };
+  saveConfig(config);
+  const updated = buildSystemPrompt(trustConfig, config);
+  onSystemPromptChange(updated);
+  success(`${TRUST_CATEGORIES[k]} trust set to: ${newLevel}\n`);
+}
+
+async function editProvider(config, provider, trustConfig, onProviderChange, onSystemPromptChange) {
+  const providerId = await select({
+    message: 'Choose provider:',
+    choices: getProviderChoices(),
+    default: config.provider,
+  });
+  const providerDef = PROVIDERS[providerId];
+  const nextConfig = { ...config, provider: providerId };
+
+  if (providerDef.custom) {
+    nextConfig.baseUrl = await input({
+      message: 'Enter the API base URL:',
+      default: nextConfig.baseUrl || providerDef.baseUrl || '',
+      validate: (val) => val.length > 0 || 'Base URL is required for custom providers',
+    });
+  } else {
+    const useDefaultBaseUrl = await confirm({
+      message: `Use default base URL (${providerDef.baseUrl})?`,
+      default: true,
+    });
+    nextConfig.baseUrl = useDefaultBaseUrl
+      ? providerDef.baseUrl
+      : await input({
+          message: 'Enter custom base URL:',
+          default: nextConfig.baseUrl || providerDef.baseUrl,
+        });
+  }
+
+  if (providerDef.needsKey) {
+    nextConfig.apiKey = await input({
+      message: `Enter ${providerDef.name} API key:`,
+      default: nextConfig.apiKey || '',
+      validate: (val) => val.length > 0 || 'API key is required',
+    });
+  } else if (providerDef.auth === 'oauth') {
+    if (!(await confirm({ message: `Run OAuth login for ${providerDef.name} now?`, default: true }))) {
+      nextConfig.apiKey = '';
+    } else {
+      try {
+        const r = providerId === 'codex' ? await codexLogin({ open: true }) : null;
+        if (r) success(`Logged in to ${providerDef.name} as ${r.email || 'user'}.\n`);
+      } catch (e) { warn(`OAuth login failed: ${e.message}\n`); }
+    }
+  } else if (providerDef.auth === 'github-token') {
+    if (!(await confirm({ message: `Set GitHub token for ${providerDef.name} now?`, default: true }))) {
+      nextConfig.apiKey = '';
+    } else {
+      const token = await input({ message: 'GitHub token (needs Copilot access):', validate: v => v.length > 0 || 'required' });
+      copilotSetToken(token, 'manual');
+    }
+  } else {
+    nextConfig.apiKey = '';
+  }
+
+  nextConfig.model = await chooseModelFromProvider(providerId, providerDef, nextConfig);
+  const newProvider = createProvider(nextConfig);
+
+  Object.assign(config, nextConfig);
+  saveConfig(config);
+  onProviderChange(newProvider);
+
+  const updated = buildSystemPrompt(trustConfig, config);
+  onSystemPromptChange(updated);
+  success(`Provider set to: ${providerDef.name} (${config.model})\n`);
+}
+
+async function editModel(config, provider, onProviderChange, onSystemPromptChange) {
+  const providerDef = PROVIDERS[config.provider];
+  const newModel = await chooseModelFromProvider(config.provider, providerDef, config);
+  config.model = newModel;
+  const newProvider = createProvider(config);
+  saveConfig(config);
+  onProviderChange(newProvider);
+  const updated = buildSystemPrompt(config.trust || {}, config);
+  onSystemPromptChange(updated);
+  success(`Model set to: ${newModel}\n`);
+}
+
+async function editAuth() {
+  console.log(chalk.white.bold('\n  Auth status\n'));
+  const cdx = codexStatus();
+  const cop = copilotStatus();
+  console.log(`  Codex:    ${cdx.logged_in ? chalk.green('logged in') : chalk.gray('not logged in')}${cdx.email ? ` (${cdx.email})` : ''}`);
+  console.log(`  Copilot:  ${cop.logged_in ? chalk.green('logged in') : chalk.gray('not logged in')}${cop.token_preview ? ` (${cop.token_preview})` : ''}`);
+  console.log();
+  const action = await select({
+    message: 'Action:',
     choices: [
-      { name: `Provider             [${config.provider}]`, value: 'provider' },
-      { name: `Model                [${config.model || 'default'}]`, value: 'model' },
-      { name: `Commands Trust Level  [${trustConfig.commands}]`, value: 'commands' },
-      { name: `File Edit Trust Level [${trustConfig.files}]`, value: 'files' },
-      { name: `Tool Calling Mode   [${config.toolCallMode || 'xml'}]`, value: 'toolCallMode' },
-      { name: 'Back', value: 'back' },
+      { name: 'Login to Codex (OAuth)', value: 'login-codex' },
+      { name: 'Set Copilot token', value: 'set-copilot' },
+      { name: 'Logout Codex', value: 'logout-codex' },
+      { name: 'Logout Copilot', value: 'logout-copilot' },
+      { name: 'Cancel', value: 'cancel' },
     ],
   });
+  if (action === 'login-codex') {
+    const spinner = createSpinner();
+    spinner.start();
+    try { const r = await codexLogin({ open: true }); spinner.stop(); success(`Logged in as ${r.email || 'user'}.\n`); }
+    catch (e) { spinner.stop(); warn(`Login failed: ${e.message}\n`); }
+  } else if (action === 'set-copilot') {
+    const token = await input({ message: 'GitHub token:', validate: v => v.length > 0 || 'required' });
+    copilotSetToken(token, 'manual');
+    success('Copilot token set.\n');
+  } else if (action === 'logout-codex') { codexLogout(); success('Logged out of Codex.\n'); }
+  else if (action === 'logout-copilot') { copilotLogout(); success('Copilot token cleared.\n'); }
+}
 
-  if (setting === 'back') {
-    console.log();
-    return;
+async function editToolCallMode(config, provider, trustConfig, onProviderChange, onSystemPromptChange) {
+  const newMode = await select({
+    message: 'Set tool calling mode:',
+    choices: TOOL_CALL_MODE_CHOICES,
+    default: config.toolCallMode || 'xml',
+  });
+  config.toolCallMode = newMode;
+  if (provider) provider.toolCallMode = newMode;
+  saveConfig(config);
+  const updated = buildSystemPrompt(trustConfig, config);
+  onSystemPromptChange(updated);
+  success(`Tool calling mode set to: ${newMode}\n`);
+}
+
+async function editNum(key, label, config) {
+  const v = await input({ message: `${label}:`, default: String(config[key] ?? ''), validate: v => /^-?\d+(\.\d+)?$/.test(v) || 'must be a number' });
+  config[key] = Number(v);
+  saveConfig(config);
+  success(`${label} = ${v}\n`);
+}
+
+async function editStr(key, label, config, validate) {
+  const v = await input({ message: `${label}:`, default: String(config[key] ?? ''), validate });
+  config[key] = v;
+  saveConfig(config);
+  success(`${label} = ${v}\n`);
+}
+
+async function editBool(key, label, config) {
+  const v = await confirm({ message: `${label}?`, default: !!config[key] });
+  config[key] = v;
+  saveConfig(config);
+  success(`${label} = ${v}\n`);
+}
+
+async function editList(key, label, config, help) {
+  const cur = (config[key] || []).join(', ');
+  const v = await input({ message: `${label} (comma-separated)${help ? ' — ' + help : ''}:`, default: cur });
+  const arr = v.split(',').map(s => s.trim()).filter(Boolean);
+  config[key] = arr;
+  saveConfig(config);
+  success(`${label} = [${arr.join(', ')}]\n`);
+}
+
+async function editNet(field, config) {
+  switch (field) {
+    case 'timeout': await editNum('networkTimeoutMs', 'Network timeout (ms)', config); break;
+    case 'maxbytes': await editNum('networkMaxBytes', 'Network max response bytes', config); break;
+    case 'allow': await editList('networkAllowHosts', 'Allowed hosts (empty = all)', config, 'e.g. api.openai.com'); break;
+    case 'deny': await editList('networkDenyHosts', 'Denied hosts', config, 'e.g. 169.254.169.254'); break;
+    case 'search': await editStr('searchInstance', 'SearXNG base URL (empty = use auto backends)', config, () => true); break;
+    case 'proxy': await editStr('proxy', 'Proxy URL (http://host:port, empty = no proxy)', config, () => true); break;
   }
+}
+
+async function editPath(field, config) {
+  switch (field) {
+    case 'outside': await editBool('allowOutsideWorkspace', 'Allow file access outside workspace', config); break;
+    case 'dangerous': await editList('dangerousPaths', 'Dangerous path bypass', config, 'absolute paths the agent MAY touch (use carefully)'); break;
+    case 'memory': await editStr('memoryFile', 'Memory file path (empty = ~/.creecode/memory.json)', config, () => true); break;
+    case 'skills': await editStr('skillsDir', 'Skills dir path (empty = ~/.creecode/skills)', config, () => true); break;
+  }
+}
+
+async function editCmd(field, config) {
+  switch (field) {
+    case 'timeout': await editNum('commandTimeoutMs', 'Command timeout (ms)', config); break;
+    case 'maxout': await editNum('commandMaxOutputBytes', 'Command max output bytes', config); break;
+  }
+}
+
+async function editGen(field, config) {
+  switch (field) {
+    case 'temperature': await editNum('temperature', 'Temperature (0.0 - 2.0)', config); break;
+    case 'topp': await editNum('topP', 'Top-P (0.0 - 1.0)', config); break;
+    case 'maxtokens': await editNum('maxTokens', 'Max output tokens', config); break;
+  }
+}
+
+async function editSys(field, config) {
+  switch (field) {
+    case 'appendix': {
+      const v = await input({ message: 'System prompt appendix (extra instructions for the agent):', default: config.systemPromptAppendix || '' });
+      config.systemPromptAppendix = v;
+      saveConfig(config);
+      success('System prompt appendix updated.\n');
+      break;
+    }
+    case 'historymax': await editNum('historyMaxMessages', 'Max history messages kept in session file', config); break;
+    case 'autocompact': await editBool('autoCompactHistory', 'Auto-compact history when near the cap', config); break;
+  }
+}
+
+async function editTools(field, config) {
+  switch (field) {
+    case 'disable': {
+      const cur = (config.disabledTools || []).join(', ');
+      const v = await input({ message: 'Disabled tools (comma-separated, empty = none):', default: cur });
+      config.disabledTools = v.split(',').map(s => s.trim()).filter(Boolean);
+      saveConfig(config);
+      success(`Disabled ${config.disabledTools.length} tool(s).\n`);
+      break;
+    }
+    case 'enable': {
+      const cur = (config.enabledTools || []).join(', ');
+      const v = await input({ message: 'Enabled-only tools (empty = all enabled):', default: cur });
+      config.enabledTools = v ? v.split(',').map(s => s.trim()).filter(Boolean) : null;
+      saveConfig(config);
+      success(`Enabled-only list updated.\n`);
+      break;
+    }
+  }
+}
 
   if (setting === 'provider') {
     const providerId = await select({

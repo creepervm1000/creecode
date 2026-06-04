@@ -155,4 +155,16 @@ export class HuggingFaceProvider extends BaseProvider {
 
     return full;
   }
+
+  async listModels() {
+    // HF Inference API is per-model. No global list endpoint. Return some
+    // well-known chat-capable options as a hint.
+    return [
+      { id: 'meta-llama/Llama-3.3-70B-Instruct', tags: ['llama', 'instruct', 'flagship'] },
+      { id: 'meta-llama/Meta-Llama-3-8B-Instruct', tags: ['llama', 'instruct', 'small'] },
+      { id: 'mistralai/Mistral-7B-Instruct-v0.3', tags: ['mistral', 'instruct'] },
+      { id: 'Qwen/Qwen2.5-72B-Instruct', tags: ['qwen', 'instruct', 'flagship'] },
+      { id: 'microsoft/Phi-3-medium-4k-instruct', tags: ['phi', 'instruct', 'small'] },
+    ];
+  }
 }

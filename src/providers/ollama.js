@@ -161,4 +161,29 @@ export class OllamaProvider extends BaseProvider {
 
     return full;
   }
+
+  async listModels() {
+    try {
+      const res = await this.fetchWithRetry(`${this.baseUrl}/api/tags`);
+      if (!res.ok) return [];
+      const data = await res.json();
+      return (data.models || []).map(m => ({
+        id: m.name,
+        size: m.size || null,
+        family: m.details?.family || null,
+        parameter_size: m.details?.parameter_size || null,
+        quantization: m.details?.quantization_level || null,
+        tags: deriveOllamaTags(m.details),
+      }));
+    } catch { return []; }
+  }
+}
+
+function deriveOllamaTags(details) {
+  if (!details) return [];
+  const tags = [];
+  if (details.family) tags.push(details.family);
+  if (details.parameter_size) tags.push(details.parameter_size);
+  if (details.quantization_level) tags.push(details.quantization_level);
+  return tags;
 }
