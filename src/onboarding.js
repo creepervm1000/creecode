@@ -40,14 +40,16 @@ export async function listModels(config) {
 
   if (config.provider === 'ollama') {
     try {
-      const res = await fetch(`${baseUrl}/api/tags`);
-      const data = await res.json();
-      const models = (data.models || []).map(m => m.name);
+      const provider = new providerDef.class({ baseUrl, fetchFn: globalThis.fetch });
+      const models = await provider.listModels();
       if (models.length === 0) {
         console.log('No models found.');
         return;
       }
-      models.forEach(m => console.log(`  ${m}`));
+      for (const m of models) {
+        const tags = (m.tags || []).map(t => `[${t}]`).join(' ');
+        console.log(`  ${m.id}${tags ? ' ' + tags : ''}`);
+      }
     } catch (err) {
       error(`Failed to fetch Ollama models: ${err.message}`);
     }
@@ -66,7 +68,11 @@ export async function listModels(config) {
         console.log('No models found.');
         return;
       }
-      models.forEach(m => console.log(`  ${m}`));
+      for (const m of models) {
+        const id = typeof m === 'string' ? m : m.id;
+        const tags = (m.tags || []).map(t => `[${t}]`).join(' ');
+        console.log(`  ${id}${tags ? ' ' + tags : ''}`);
+      }
     } catch (err) {
       error(`Failed to fetch Gemini models: ${err.message}`);
     }

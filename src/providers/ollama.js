@@ -64,21 +64,6 @@ export class OllamaProvider extends BaseProvider {
     };
   }
 
-  /**
-   * List available models from Ollama.
-   */
-  async listModels() {
-    try {
-      const res = await this.request(`${this.baseUrl}/api/tags`, {
-        method: 'GET',
-      });
-      const data = await res.json();
-      return (data.models || []).map(m => m.name);
-    } catch {
-      return [];
-    }
-  }
-
   async chat(messages) {
     const res = await this.request(`${this.baseUrl}/api/chat`, {
       method: 'POST',

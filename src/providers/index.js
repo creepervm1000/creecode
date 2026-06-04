@@ -3,8 +3,6 @@ import { AnthropicProvider } from './anthropic.js';
 import { GeminiProvider } from './gemini.js';
 import { OllamaProvider } from './ollama.js';
 import { HuggingFaceProvider } from './huggingface.js';
-import { OpenAICodexProvider, startOpenAICodexAuth } from './openai_codex.js';
-import { GitHubCopilotProvider, startGitHubCopilotAuth } from './github_copilot.js';
 import { CodexProvider, codexLogin, codexLogout, codexStatus } from './codex.js';
 import { CopilotProvider, copilotStatus, copilotSetToken, copilotLogout } from './copilot.js';
 
@@ -165,5 +163,3 @@ export function createProvider(config) {
     retryAttempts: config.retryAttempts,
   });
 }
-
-export { startOpenAICodexAuth, startGitHubCopilotAuth };

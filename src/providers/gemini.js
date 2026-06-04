@@ -10,33 +10,6 @@ export class GeminiProvider extends BaseProvider {
     this.model = config.model || 'gemini-2.5-flash';
   }
 
-  async listModels() {
-    const models = [];
-    let pageToken = '';
-
-    while (true) {
-      const tokenQuery = pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : '';
-      const url = `${this.baseUrl}/v1beta/models?key=${this.apiKey}${tokenQuery}`;
-      const res = await this.request(url, {
-        method: 'GET',
-        headers: { 'Content-Type': 'application/json' },
-      });
-
-      const data = await res.json();
-      for (const model of data.models || []) {
-        if ((model.supportedGenerationMethods || []).includes('generateContent')) {
-          const modelName = model.name?.replace(/^models\//, '');
-          if (modelName) models.push(modelName);
-        }
-      }
-
-      pageToken = data.nextPageToken || '';
-      if (!pageToken) break;
-    }
-
-    return models.sort((a, b) => a.localeCompare(b));
-  }
-
   _convertMessages(messages) {
     // Convert OpenAI-style messages to Gemini's contents format
     let systemInstruction = '';

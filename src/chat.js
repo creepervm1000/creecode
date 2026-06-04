@@ -258,14 +258,22 @@ async function chooseModelFromProvider(providerId, providerDef, config) {
   if (providerId === 'ollama') {
     info('Checking for available Ollama models...');
     try {
-      const res = await fetch(`${config.baseUrl || 'http://localhost:11434'}/api/tags`);
-      const data = await res.json();
-      const models = (data.models || []).map(m => m.name);
+      const tmpProvider = new providerDef.class({
+        baseUrl: config.baseUrl || providerDef.baseUrl,
+        fetchFn: globalThis.fetch,
+      });
+      const models = await tmpProvider.listModels();
       if (models.length > 0) {
-        return await select({
-          message: 'Select a model:',
-          choices: models.map(m => ({ name: m, value: m })),
+        const choices = models.map(m => {
+          const tags = (m.tags || []).map(t => chalk.gray(`[${t}]`)).join(' ');
+          return { name: tags ? `${m.id} ${tags}` : m.id, value: m.id };
         });
+        choices.push({ name: chalk.yellow('— enter model name manually —'), value: '__manual__' });
+        const pick = await select({ message: `Select a model (${models.length} available):`, choices });
+        if (pick === '__manual__') {
+          return await input({ message: 'Enter Ollama model name:', default: config.model || providerDef.defaultModel });
+        }
+        return pick;
       }
     } catch {
       // fall back to manual input below
@@ -1439,114 +1447,6 @@ async function editTools(field, config) {
       break;
     }
   }
-}
-
-  if (setting === 'provider') {
-    const providerId = await select({
-      message: 'Choose provider:',
-      choices: getProviderChoices(),
-      default: config.provider,
-    });
-    const providerDef = PROVIDERS[providerId];
-    const nextConfig = { ...config, provider: providerId };
-
-    if (providerDef.custom) {
-      nextConfig.baseUrl = await input({
-        message: 'Enter the API base URL:',
-        default: nextConfig.baseUrl || providerDef.baseUrl || '',
-        validate: (val) => val.length > 0 || 'Base URL is required for custom providers',
-      });
-    } else {
-      const useDefaultBaseUrl = await confirm({
-        message: `Use default base URL (${providerDef.baseUrl})?`,
-        default: true,
-      });
-      nextConfig.baseUrl = useDefaultBaseUrl
-        ? providerDef.baseUrl
-        : await input({
-          message: 'Enter custom base URL:',
-          default: nextConfig.baseUrl || providerDef.baseUrl,
-        });
-    }
-
-    if (providerDef.needsKey) {
-      nextConfig.apiKey = await input({
-        message: `Enter ${providerDef.name} API key:`,
-        default: nextConfig.apiKey || '',
-        validate: (val) => val.length > 0 || 'API key is required',
-      });
-    } else {
-      nextConfig.apiKey = '';
-    }
-
-    nextConfig.model = await chooseModelFromProvider(providerId, providerDef, nextConfig);
-    const newProvider = createProvider(nextConfig);
-
-    Object.assign(config, nextConfig);
-    saveConfig(config);
-    onProviderChange(newProvider);
-
-    const updated = buildSystemPrompt(trustConfig, config);
-    onSystemPromptChange(updated);
-
-    success(`Provider set to: ${providerDef.name} (${config.model})`);
-    console.log();
-    return;
-  }
-
-  if (setting === 'model') {
-    const providerDef = PROVIDERS[config.provider];
-    config.model = await chooseModelFromProvider(config.provider, providerDef, config);
-    const newProvider = createProvider(config);
-    saveConfig(config);
-    onProviderChange(newProvider);
-
-    const updated = buildSystemPrompt(trustConfig, config);
-    onSystemPromptChange(updated);
-
-    success(`Model set to: ${config.model}`);
-    console.log();
-    return;
-  }
-
-  if (setting === 'toolCallMode') {
-    const newMode = await select({
-      message: 'Set tool calling mode:',
-      choices: TOOL_CALL_MODE_CHOICES,
-      default: config.toolCallMode || 'xml',
-    });
-
-    config.toolCallMode = newMode;
-    provider.toolCallMode = newMode;
-    saveConfig(config);
-
-    const updated = buildSystemPrompt(trustConfig, config);
-    onSystemPromptChange(updated);
-
-    success(`Tool calling mode set to: ${newMode}`);
-    console.log();
-    return;
-  }
-
-  const newLevel = await select({
-    message: `Set trust level for ${TRUST_CATEGORIES[setting]}:`,
-    choices: Object.entries(TRUST_LEVELS).map(([id, l]) => ({
-      name: `${l.name} — ${l.description}`,
-      value: id,
-    })),
-    default: trustConfig[setting],
-  });
-
-  trustConfig[setting] = newLevel;
-
-  config.trust = { ...trustConfig };
-  saveConfig(config);
-
-  const updated = buildSystemPrompt(trustConfig, config);
-  onSystemPromptChange(updated);
-
-  success(`${TRUST_CATEGORIES[setting]} trust set to: ${newLevel}`);
-  console.log();
 }
 
 /**
