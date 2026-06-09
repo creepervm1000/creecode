@@ -9,7 +9,8 @@ import { GitHubCopilotProvider, startGitHubCopilotAuth, copilotStatus, copilotLo
 /**
  * Provider registry — maps provider IDs to their class and default config.
  */
-export const PROVIDERS = {
+/**
+  this is broken rn so uhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh
   creecodego: {
     name: 'CreeCode Go',
     class: OpenAIProvider,
@@ -17,6 +18,9 @@ export const PROVIDERS = {
     defaultModel: 'creecode/auto',
     needsKey: true,
   },
+  */
+
+export const PROVIDERS = {
   openai: {
     name: 'OpenAI',
     class: OpenAIProvider,
