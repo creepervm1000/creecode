@@ -8,8 +8,7 @@ CreeCode follows a rolling release model. Only the latest commit on `main` is su
 
 If you discover a security vulnerability, please **do not** open a public issue.
 
-Instead, send a report to the maintainers via the CreeperNet Git instance with a private issue
-or contact `creeper@noreply.localhost` directly.
+instead, contact me via my email address: `creeper@creepernet.qzz.io`.
 
 Please include:
 
