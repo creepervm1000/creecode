@@ -6,12 +6,14 @@
   "bin": {
     "creecode": "./bin/creecode.js",
     "telegramo": "./bin/telegramo.js",
-    "discordo": "./bin/discordo.js"
+    "discordo": "./bin/discordo.js",
+    "creechat": "./bin/creechat.js"
   },
   "scripts": {
     "start": "node bin/creecode.js",
     "telegram": "node bin/telegramo.js",
     "discord": "node bin/discordo.js",
+    "creechat": "node bin/creechat.js",
     "bundle": "node scripts/bundle.js"
   },
   "dependencies": {

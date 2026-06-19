@@ -2,10 +2,10 @@
 
 /**
  * CreeCode Bundler — merges the entire project into single executable JS files.
- * Bundles creecode (CLI), telegramo (Telegram bot), and discordo (Discord bot).
+ * Bundles creecode (CLI), telegramo (Telegram bot), discordo (Discord bot), and creechat (CreeChat bot).
  *
  * Usage: node scripts/bundle.js [output-name]
- *   output-name: "creecode", "telegramo", or "discordo" to bundle just one
+ *   output-name: "creecode", "telegramo", "discordo", or "creechat" to bundle just one
  */
 
 import { build } from 'esbuild';
@@ -21,6 +21,7 @@ const ENTRIES = [
   { entry: join(ROOT, 'bin', 'creecode.js'),  out: join(ROOT, 'dist', 'creecode.mjs') },
   { entry: join(ROOT, 'bin', 'telegramo.js'), out: join(ROOT, 'dist', 'telegramo.mjs') },
   { entry: join(ROOT, 'bin', 'discordo.js'),  out: join(ROOT, 'dist', 'discordo.mjs') },
+  { entry: join(ROOT, 'bin', 'creechat.js'),  out: join(ROOT, 'dist', 'creechat.mjs') },
 ];
 
 const filter = process.argv[2];

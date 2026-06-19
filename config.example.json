@@ -4,6 +4,16 @@
     "allowedChats": [],
     "listenAll": false
   },
+  "creechat": {
+    "baseUrl": "https://creechat.example.com",
+    "token": "your creechat bot token here",
+    "allowedConversations": [],
+    "allowedGroups": [],
+    "allowedUsers": [],
+    "listenAll": false,
+    "pollTimeout": 25,
+    "pollLimit": 100
+  },
   "provider": {
     "name": "openai",
     "apiKey": "",

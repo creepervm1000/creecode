@@ -13,6 +13,7 @@ import { addTodo, listTodos, updateTodo, deleteTodo, clearTodos } from './todo.j
 import { getEnv } from './env.js';
 import { getDiscordUserInfo } from './discord_info.js';
 import { getTelegramUserInfo, getTelegramChatInfo } from './telegram_info.js';
+import { searchCreeChatUsers, getCreeChatUser, creechatDmUser, creechatBlockUser, creechatUnblockUser, listCreeChatBlocks } from './creechat_info.js';
 import { webSearch, webFetch, webExtractLinks, webExtractMeta } from './web.js';
 import { base64Encode, base64Decode, hashText, urlEncode, urlDecode, jsonFormat, jsonValidate, uuidGenerate, randomString, jwtDecode, regexTest } from './text.js';
 import { csvParse, csvRead, yamlRead, tomlRead } from './data.js';
@@ -115,6 +116,18 @@ export const TOOL_DEFINITIONS = [
     parameters: { userId: { type: "string", description: "Telegram user ID (numeric)", required: true } } },
   { name: "get_telegram_chat", description: "Look up a Telegram chat/group info by ID", category: "telegram", handler: getTelegramChatInfo,
     parameters: { chatId: { type: "string", description: "Telegram chat ID (numeric)", required: true } } },
+  { name: "search_creechat_users", description: "Search CreeChat verified users by username query", category: "network", handler: searchCreeChatUsers,
+    parameters: { query: { type: "string", description: "Username search string", required: true } } },
+  { name: "get_creechat_user", description: "Get public CreeChat user info by user ID", category: "network", handler: getCreeChatUser,
+    parameters: { userId: { type: "string", description: "CreeChat user UUID", required: true } } },
+  { name: "creechat_dm_user", description: "Proactively send a DM to a CreeChat user (AI-agent bots only)", category: "network", handler: creechatDmUser,
+    parameters: { userId: { type: "string", description: "Target CreeChat user UUID", required: true }, text: { type: "string", description: "Message text", required: true } } },
+  { name: "creechat_block_user", description: "Block a CreeChat user (AI-agent bots only)", category: "network", handler: creechatBlockUser,
+    parameters: { userId: { type: "string", description: "Target CreeChat user UUID", required: true } } },
+  { name: "creechat_unblock_user", description: "Unblock a CreeChat user (AI-agent bots only)", category: "network", handler: creechatUnblockUser,
+    parameters: { userId: { type: "string", description: "Target CreeChat user UUID", required: true } } },
+  { name: "list_creechat_blocks", description: "List CreeChat users blocked by the bot (AI-agent bots only)", category: "network", handler: listCreeChatBlocks,
+    parameters: {} },
   { name: 'web_search', description: 'Search the web via pluggable backends (auto falls through: searxng -> ddg -> bing -> wikipedia)', category: 'web', handler: webSearch,
     parameters: { query: { type: 'string', required: true, description: 'Search query' }, limit: { type: 'number', required: false, description: 'Max results (1-50, default 10)' }, backend: { type: 'string', required: false, description: '"auto" (default) | "wikipedia" | "ddg" | "bing" | "searxng"' } } },
   { name: 'web_fetch', description: 'Fetch a URL and convert HTML to readable text or markdown', category: 'web', handler: webFetch,
