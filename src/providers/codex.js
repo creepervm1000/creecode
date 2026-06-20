@@ -1,6 +1,8 @@
 import { OpenAIProvider } from './openai.js';
-import { getProviderAuth, setProviderAuth, generatePkce, generateState, openBrowser, startCallbackServer, clearProviderAuth } from '../auth.js';
+import { getProviderAuth, setProviderAuth, getProviderAccounts, setProviderCurrentAccount, getProviderCurrentAccount, clearProviderAuth, generatePkce, generateState, openBrowser, startCallbackServer } from '../auth.js';
 import { info, warn } from '../utils/logger.js';
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 /**
  * OpenAI Codex provider.
@@ -21,6 +23,9 @@ import { info, warn } from '../utils/logger.js';
  *
  * Token refresh: handled transparently in getAccessToken() — if the
  * access token is within 60s of expiry, refresh.
+ *
+ * Multi-account support: stores multiple accounts under `providers.codex.accounts`
+ * and rotates on rate limits (429).
  */
 
 const CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann';  // public OAuth client id from openai-codex
@@ -79,7 +84,7 @@ function decodeJwtPayload(jwt) {
   } catch { return null; }
 }
 
-export async function codexLogin({ port = DEFAULT_PORT, open = true, printUrl } = {}) {
+export async function codexLogin({ port = DEFAULT_PORT, open = true, printUrl, accountId = 'default' } = {}) {
   const { verifier, challenge } = generatePkce();
   const state = generateState();
   const params = new URLSearchParams({
@@ -122,20 +127,23 @@ export async function codexLogin({ port = DEFAULT_PORT, open = true, printUrl } 
               || null,
     email: idClaims?.email || null,
   };
-  setProviderAuth('codex', stored);
+  setProviderAuth('codex', stored, accountId);
   return { ok: true, email: stored.email, account_id: stored.account_id };
 }
 
-export function codexLogout() {
-  clearProviderAuth('codex');
+export function codexLogout(accountId) {
+  clearProviderAuth('codex', accountId);
   return { ok: true };
 }
 
 export function codexStatus() {
-  const a = getProviderAuth('codex');
+  const accounts = getProviderAccounts('codex');
+  if (!accounts || Object.keys(accounts).length === 0) return { logged_in: false };
+  const current = getProviderCurrentAccount('codex') || Object.keys(accounts)[0];
+  const a = accounts[current];
   if (!a) return { logged_in: false };
   const exp = a.expires_at ? new Date(a.expires_at * 1000).toISOString() : null;
-  return { logged_in: true, email: a.email, account_id: a.account_id, expires_at: exp };
+  return { logged_in: true, email: a.email, account_id: a.account_id, expires_at: exp, currentAccount: current, accounts: Object.keys(accounts) };
 }
 
 export class CodexProvider extends OpenAIProvider {
@@ -146,9 +154,28 @@ export class CodexProvider extends OpenAIProvider {
       model: config.model || 'gpt-5-codex',
     });
     this.kind = 'codex';
+    this.accounts = config.accounts || [];
+    this.currentAccountIndex = 0;
+    this.enableAccountRotation = this.accounts.length > 1;
   }
 
-  async getAccessToken() {
+  getCurrentAccountId() {
+    if (this.enableAccountRotation && this.accounts.length > 0) {
+      return this.accounts[this.currentAccountIndex];
+    }
+    return getProviderCurrentAccount('codex') || 'default';
+  }
+
+  rotateAccount() {
+    if (!this.enableAccountRotation || this.accounts.length <= 1) {
+      return false;
+    }
+    this.currentAccountIndex = (this.currentAccountIndex + 1) % this.accounts.length;
+    return true;
+  }
+
+  async getAccessToken(accountId) {
+    const targetAccount = accountId || this.getCurrentAccountId();
     let auth = getProviderAuth('codex');
     if (!auth || !auth.access_token) {
       throw new Error('Not logged in to Codex. Run: /login codex');
@@ -164,7 +191,7 @@ export class CodexProvider extends OpenAIProvider {
           expires_at: Math.floor(Date.now() / 1000) + (refreshed.expires_in || 3600),
           id_token: refreshed.id_token || auth.id_token,
         };
-        setProviderAuth('codex', auth);
+        setProviderAuth('codex', auth, targetAccount);
       } catch (e) {
         throw new Error(`Codex token refresh failed: ${e.message}. Run: /login codex`);
       }
@@ -173,10 +200,6 @@ export class CodexProvider extends OpenAIProvider {
   }
 
   buildHeaders() {
-    // Async: we need the access token. But buildHeaders is sync in OpenAI.
-    // We override the request path to inject the token at fetch time.
-    // The parent class calls buildHeaders in chat() and streamChat().
-    // To stay compatible, we expose a sync token cache updated by ensureAuth.
     if (!this._token) throw new Error('CodexProvider: token not loaded. Call ensureAuth() first.');
     return {
       'Content-Type': 'application/json',
@@ -185,10 +208,45 @@ export class CodexProvider extends OpenAIProvider {
     };
   }
 
-  async ensureAuth() {
-    this._token = await this.getAccessToken();
-    const a = getProviderAuth('codex');
+  async ensureAuth(accountId) {
+    this._token = await this.getAccessToken(accountId);
+    const targetAccount = accountId || this.getCurrentAccountId();
+    const a = getProviderAccounts('codex')[targetAccount];
     this._accountId = a?.account_id || '';
+  }
+
+  async fetchWithRetry(url, options = {}, opts = {}) {
+    const onRetry = opts.onRetry;
+    let lastErr = null;
+    const maxAttempts = Math.max(1, opts.attempts ?? this.retryAttempts);
+    const delayMs = opts.delayMs ?? this.retryDelayMs;
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        const accountId = this.getCurrentAccountId();
+        await this.ensureAuth(accountId);
+        const res = await super.fetchWithRetry(url, {
+          ...options,
+          headers: {
+            ...(options.headers || {}),
+            'Authorization': `Bearer ${this._token}`,
+            'ChatGPT-Account-ID': this._accountId || '',
+          },
+        }, opts);
+        return res;
+      } catch (e) {
+        lastErr = e;
+        if (e.message.includes('429') && this.rotateAccount()) {
+          if (onRetry) onRetry(attempt, 429, new Error('Rate limited, rotating account'));
+          await sleep(delayMs);
+          continue;
+        }
+        if (attempt === maxAttempts) throw e;
+        if (onRetry) onRetry(attempt, null, e);
+        await sleep(delayMs);
+      }
+    }
+    throw lastErr || new Error('fetchWithRetry: exhausted attempts');
   }
 
   async chat(messages) {
@@ -203,8 +261,6 @@ export class CodexProvider extends OpenAIProvider {
 
   async listModels() {
     await this.ensureAuth();
-    // OpenAI's /models endpoint works with OAuth tokens too. We tag each
-    // entry with a brief note about whether it looks like a codex model.
     try {
       const res = await this.fetchWithRetry(`${this.baseUrl}/models`, {
         headers: { 'Authorization': `Bearer ${this._token}`, 'ChatGPT-Account-ID': this._accountId || '' },

@@ -12,6 +12,8 @@ import { TRUST_LEVELS, TRUST_CATEGORIES } from './trust.js';
 import { saveConfig, loadConfig } from './config.js';
 import { setRawMode } from './utils/terminal.js';
 import { createProvider, getProviderChoices, PROVIDERS, codexLogin, codexLogout, codexStatus, copilotStatus, copilotLogout, startGitHubCopilotAuth } from './providers/index.js';
+import { setProviderCurrentAccount } from './auth.js';
+import { setTokenCurrentAccount } from './oauth.js';
 import { showSidebar, clearSidebar, canShowSidebar, loadTodos, MIN_WIDTH } from './utils/sidebar.js';
 import { subagentManager } from './subagent.js';
 import { discoverSkills, initSkillDir, clearRuntimeTools, registerRuntimeTool } from './tools/index.js';
@@ -1042,43 +1044,49 @@ async function handleCommand(input, messages, config, provider, rl, trustConfig,
 
     case '/login': {
       const arg = input.slice('/login'.length).trim();
-      if (!arg) { warn('usage: /login codex | /login copilot\n'); break; }
-      if (arg === 'codex') {
+      if (!arg) { warn('usage: /login codex [account] | /login copilot [account]\n'); break; }
+      const parts = arg.split(/\s+/);
+      const provider = parts[0];
+      const accountId = parts[1] || 'default';
+      if (provider === 'codex') {
         const spinner = createSpinner();
         spinner.start();
         try {
-          const r = await codexLogin({ open: true });
+          const r = await codexLogin({ open: true, accountId });
           spinner.stop();
-          success(`Logged in to Codex as ${r.email || 'unknown user'}.\n`);
+          success(`Logged in to Codex as ${r.email || 'unknown user'} (account: ${accountId}).\n`);
         } catch (e) { spinner.stop(); warn(`Codex login failed: ${e.message}\n`); }
-      } else if (arg === 'copilot') {
+      } else if (provider === 'copilot') {
         // GitHub OAuth Device Flow (RFC 8628). Copilot API only accepts
         // tokens from GitHub OAuth apps with the `copilot` scope, not
         // personal access tokens.
         info('Requesting device code from GitHub...');
-        let prompt;
         const result = await startGitHubCopilotAuth({
-          onPrompt: (p) => { prompt = p; },
+          accountId,
+          onPrompt: (p) => {
+            console.log();
+            info('To finish signing in to GitHub Copilot, open:');
+            info(`  ${chalk.cyan(p.verifyUrl)}`);
+            info(`and enter the code:  ${chalk.bold(p.userCode)}`);
+            info('(polling for authorization...)');
+          },
         });
-        if (prompt) {
-          console.log();
-          info('To finish signing in to GitHub Copilot, open:');
-          info(`  ${chalk.cyan(prompt.verifyUrl)}`);
-          info(`and enter the code:  ${chalk.bold(prompt.userCode)}`);
-          info('(polling for authorization...)');
-        }
-        success(`Logged in to GitHub Copilot (scope: ${result.scope || 'copilot'}).\n`);
+        success(`Logged in to GitHub Copilot (scope: ${result.scope || 'copilot'}, account: ${accountId}).\n`);
       } else {
-        warn(`Unknown provider "${arg}". Supported: codex, copilot\n`);
+        warn(`Unknown provider "${provider}". Supported: codex, copilot\n`);
       }
       break;
     }
 
     case '/logout': {
       const arg = input.slice('/logout'.length).trim();
-      if (arg === 'codex') { codexLogout(); success('Logged out of Codex.\n'); }
-      else if (arg === 'copilot') { copilotLogout(); success('Copilot token cleared.\n'); }
-      else warn('usage: /logout codex | /logout copilot\n');
+      if (!arg) { warn('usage: /logout codex [account] | /logout copilot [account]\n'); break; }
+      const parts = arg.split(/\s+/);
+      const provider = parts[0];
+      const accountId = parts[1];
+      if (provider === 'codex') { codexLogout(accountId); success(`Logged out of Codex${accountId ? ` (${accountId})` : ''}.\n`); }
+      else if (provider === 'copilot') { copilotLogout(accountId); success(`Copilot token cleared${accountId ? ` (${accountId})` : ''}.\n`); }
+      else warn('usage: /logout codex [account] | /logout copilot [account]\n');
       break;
     }
 
@@ -1260,11 +1268,32 @@ async function editProvider(config, provider, trustConfig, onProviderChange, onS
   }
 
   if (providerDef.needsKey) {
-    nextConfig.apiKey = await input({
-      message: `Enter ${providerDef.name} API key:`,
-      default: nextConfig.apiKey || '',
-      validate: (val) => val.length > 0 || 'API key is required',
-    });
+    const keys = [];
+    const existingKeys = nextConfig.apiKeys || (nextConfig.apiKey ? [nextConfig.apiKey] : []);
+    for (let i = 0; i < existingKeys.length; i++) {
+      const key = await input({
+        message: `API key ${i + 1} (leave empty to remove):`,
+        default: existingKeys[i] || '',
+        validate: (val) => true,
+      });
+      if (key) keys.push(key);
+    }
+    while (true) {
+      const key = await password({
+        message: `Add another API key (${keys.length + 1}) or press Enter to finish:`,
+        mask: '*',
+        validate: (val) => val.length === 0 || val.length > 0,
+      });
+      if (!key) break;
+      keys.push(key);
+    }
+    if (keys.length > 0) {
+      nextConfig.apiKey = keys[0];
+      nextConfig.apiKeys = keys;
+    } else {
+      nextConfig.apiKey = '';
+      nextConfig.apiKeys = [];
+    }
   } else if (providerDef.auth === 'oauth') {
     if (!(await confirm({ message: `Run OAuth login for ${providerDef.name} now?`, default: true }))) {
       nextConfig.apiKey = '';
@@ -1274,24 +1303,64 @@ async function editProvider(config, provider, trustConfig, onProviderChange, onS
         if (r) success(`Logged in to ${providerDef.name} as ${r.email || 'user'}.\n`);
       } catch (e) { warn(`OAuth login failed: ${e.message}\n`); }
     }
+    const accounts = [];
+    const existingAccounts = nextConfig.accounts || [];
+    for (let i = 0; i < existingAccounts.length; i++) {
+      const acc = await input({
+        message: `Account ${i + 1} identifier (leave empty to remove):`,
+        default: existingAccounts[i] || '',
+        validate: (val) => true,
+      });
+      if (acc) accounts.push(acc);
+    }
+    while (true) {
+      const acc = await input({
+        message: `Add another account identifier (${accounts.length + 1}) or press Enter to finish:`,
+        validate: (val) => val.length === 0 || val.length > 0,
+      });
+      if (!acc) break;
+      accounts.push(acc);
+    }
+    nextConfig.accounts = accounts;
   } else if (providerDef.auth === 'oauth-device') {
     if (!(await confirm({ message: `Run OAuth device flow for ${providerDef.name} now?`, default: true }))) {
       nextConfig.apiKey = '';
     } else {
       try {
-        let prompt;
-        const r = await startGitHubCopilotAuth({ onPrompt: (p) => { prompt = p; } });
-        if (prompt) {
-          console.log();
-          info('Open this URL to authorize:');
-          info(`  ${chalk.cyan(prompt.verifyUrl)}`);
-          info(`and enter code:  ${chalk.bold(prompt.userCode)}`);
-        }
+        const r = await startGitHubCopilotAuth({
+          onPrompt: (p) => {
+            console.log();
+            info('Open this URL to authorize:');
+            info(`  ${chalk.cyan(p.verifyUrl)}`);
+            info(`and enter code:  ${chalk.bold(p.userCode)}`);
+          }
+        });
         success(`Logged in to ${providerDef.name} (scope: ${r.scope || 'copilot'}).\n`);
       } catch (e) { warn(`OAuth login failed: ${e.message}\n`); }
     }
+    const accounts = [];
+    const existingAccounts = nextConfig.accounts || [];
+    for (let i = 0; i < existingAccounts.length; i++) {
+      const acc = await input({
+        message: `Account ${i + 1} identifier (leave empty to remove):`,
+        default: existingAccounts[i] || '',
+        validate: (val) => true,
+      });
+      if (acc) accounts.push(acc);
+    }
+    while (true) {
+      const acc = await input({
+        message: `Add another account identifier (${accounts.length + 1}) or press Enter to finish:`,
+        validate: (val) => val.length === 0 || val.length > 0,
+      });
+      if (!acc) break;
+      accounts.push(acc);
+    }
+    nextConfig.accounts = accounts;
   } else {
     nextConfig.apiKey = '';
+    nextConfig.apiKeys = [];
+    nextConfig.accounts = [];
   }
 
   nextConfig.model = await chooseModelFromProvider(providerId, providerDef, nextConfig);
@@ -1322,8 +1391,8 @@ async function editAuth() {
   console.log(chalk.white.bold('\n  Auth status\n'));
   const cdx = codexStatus();
   const cop = copilotStatus();
-  console.log(`  Codex:    ${cdx.logged_in ? chalk.green('logged in') : chalk.gray('not logged in')}${cdx.email ? ` (${cdx.email})` : ''}`);
-  console.log(`  Copilot:  ${cop.logged_in ? chalk.green('logged in') : chalk.gray('not logged in')}${cop.token_preview ? ` (${cop.token_preview})` : ''}`);
+  console.log(`  Codex:    ${cdx.logged_in ? chalk.green('logged in') : chalk.gray('not logged in')}${cdx.email ? ` (${cdx.email})` : ''}${cdx.currentAccount ? ` [${cdx.currentAccount}]` : ''}${cdx.accounts ? ` (${cdx.accounts.join(', ')})` : ''}`);
+  console.log(`  Copilot:  ${cop.logged_in ? chalk.green('logged in') : chalk.gray('not logged in')}${cop.token_preview ? ` (${cop.token_preview})` : ''}${cop.currentAccount ? ` [${cop.currentAccount}]` : ''}${cop.accounts ? ` (${cop.accounts.join(', ')})` : ''}`);
   console.log();
   const action = await select({
     message: 'Action:',
@@ -1332,29 +1401,57 @@ async function editAuth() {
       { name: 'Login to GitHub Copilot (device flow)', value: 'login-copilot' },
       { name: 'Logout Codex', value: 'logout-codex' },
       { name: 'Logout Copilot', value: 'logout-copilot' },
+      { name: 'Switch Codex Account', value: 'switch-codex' },
+      { name: 'Switch Copilot Account', value: 'switch-copilot' },
       { name: 'Cancel', value: 'cancel' },
     ],
   });
   if (action === 'login-codex') {
+    const accountId = await input({ message: 'Account identifier (default):', default: 'default' });
     const spinner = createSpinner();
     spinner.start();
-    try { const r = await codexLogin({ open: true }); spinner.stop(); success(`Logged in as ${r.email || 'user'}.\n`); }
+    try { const r = await codexLogin({ open: true, accountId }); spinner.stop(); success(`Logged in as ${r.email || 'user'} (account: ${accountId}).\n`); }
     catch (e) { spinner.stop(); warn(`Login failed: ${e.message}\n`); }
   } else if (action === 'login-copilot') {
+    const accountId = await input({ message: 'Account identifier (default):', default: 'default' });
     info('Requesting device code from GitHub...');
-    let prompt;
     try {
-      const r = await startGitHubCopilotAuth({ onPrompt: (p) => { prompt = p; } });
-      if (prompt) {
-        console.log();
-        info('Open this URL to authorize:');
-        info(`  ${chalk.cyan(prompt.verifyUrl)}`);
-        info(`and enter code:  ${chalk.bold(prompt.userCode)}`);
-      }
-      success(`Logged in to GitHub Copilot (scope: ${r.scope || 'copilot'}).\n`);
+      const r = await startGitHubCopilotAuth({
+        accountId,
+        onPrompt: (p) => {
+          console.log();
+          info('Open this URL to authorize:');
+          info(`  ${chalk.cyan(p.verifyUrl)}`);
+          info(`and enter code:  ${chalk.bold(p.userCode)}`);
+        }
+      });
+      success(`Logged in to GitHub Copilot (scope: ${r.scope || 'copilot'}, account: ${accountId}).\n`);
     } catch (e) { warn(`Login failed: ${e.message}\n`); }
-  } else if (action === 'logout-codex') { codexLogout(); success('Logged out of Codex.\n'); }
-  else if (action === 'logout-copilot') { copilotLogout(); success('Copilot token cleared.\n'); }
+  } else if (action === 'logout-codex') {
+    const cdx = codexStatus();
+    if (!cdx.accounts || cdx.accounts.length === 0) { warn('No Codex accounts to log out.\n'); return; }
+    const accountId = await select({ message: 'Account to logout:', choices: [...cdx.accounts.map(a => ({ name: a, value: a })), { name: 'All accounts', value: 'all' }] });
+    if (accountId === 'all') { codexLogout(); success('Logged out of all Codex accounts.\n'); }
+    else { codexLogout(accountId); success(`Logged out of Codex (${accountId}).\n`); }
+  } else if (action === 'logout-copilot') {
+    const cop = copilotStatus();
+    if (!cop.accounts || cop.accounts.length === 0) { warn('No Copilot accounts to log out.\n'); return; }
+    const accountId = await select({ message: 'Account to logout:', choices: [...cop.accounts.map(a => ({ name: a, value: a })), { name: 'All accounts', value: 'all' }] });
+    if (accountId === 'all') { copilotLogout(); success('Logged out of all Copilot accounts.\n'); }
+    else { copilotLogout(accountId); success(`Logged out of Copilot (${accountId}).\n`); }
+  } else if (action === 'switch-codex') {
+    const cdx = codexStatus();
+    if (!cdx.accounts || cdx.accounts.length <= 1) { warn('Only one Codex account available.\n'); return; }
+    const accountId = await select({ message: 'Switch to account:', choices: cdx.accounts.map(a => ({ name: a, value: a })) });
+    setProviderCurrentAccount('codex', accountId);
+    success(`Switched to Codex account: ${accountId}\n`);
+  } else if (action === 'switch-copilot') {
+    const cop = copilotStatus();
+    if (!cop.accounts || cop.accounts.length <= 1) { warn('Only one Copilot account available.\n'); return; }
+    const accountId = await select({ message: 'Switch to account:', choices: cop.accounts.map(a => ({ name: a, value: a })) });
+    setTokenCurrentAccount('github-copilot', accountId);
+    success(`Switched to Copilot account: ${accountId}\n`);
+  }
 }
 
 async function editToolCallMode(config, provider, trustConfig, onProviderChange, onSystemPromptChange) {

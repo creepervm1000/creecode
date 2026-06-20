@@ -15,7 +15,7 @@ export class OpenAIProvider extends BaseProvider {
   buildHeaders() {
     const headers = {
       'Content-Type': 'application/json',
-      'Authorization': `Bearer ${this.apiKey}`,
+      'Authorization': `Bearer ${this.getCurrentApiKey()}`,
     };
 
     if (this.isOpenRouter()) {

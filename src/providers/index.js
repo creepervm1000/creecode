@@ -159,6 +159,8 @@ export function createProvider(config) {
   const ProviderClass = providerDef.class;
   return new ProviderClass({
     apiKey: config.apiKey || '',
+    apiKeys: config.apiKeys || [],
+    accounts: config.accounts || [],
     model: config.model || providerDef.defaultModel,
     baseUrl: config.baseUrl || providerDef.baseUrl,
     fetchFn: config.fetchFn || globalThis.fetch,

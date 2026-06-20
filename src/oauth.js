@@ -7,8 +7,13 @@ import { homedir } from 'node:os';
  *
  * Tokens are persisted at ~/.creecode/oauth.json with a per-provider entry:
  *   {
- *     "openai-codex": { "access_token": "...", "refresh_token": "...", "expires_at": 1234 },
- *     "github-copilot": { "token": "...", "expires_at": 1234 }
+ *     "github-copilot": {
+ *       "accounts": {
+ *         "account1": { "ghAccessToken": "...", "scope": "copilot" },
+ *         "account2": { ... }
+ *       },
+ *       "currentAccount": "account1"
+ *     }
  *   }
  *
  * The device-code flow follows RFC 8628. Two steps:
@@ -32,18 +37,65 @@ export function saveTokens(tokens) {
 
 export function getToken(provider) {
   const all = loadTokens();
-  return all[provider] || null;
+  const providerData = all[provider];
+  if (!providerData) return null;
+  if (providerData.accounts) {
+    const current = providerData.currentAccount || Object.keys(providerData.accounts)[0];
+    return providerData.accounts[current] || null;
+  }
+  return providerData;
 }
 
-export function setToken(provider, data) {
+export function getTokenAccounts(provider) {
   const all = loadTokens();
-  all[provider] = { ...(all[provider] || {}), ...data, saved_at: Date.now() };
+  const providerData = all[provider];
+  if (!providerData) return {};
+  if (providerData.accounts) {
+    return providerData.accounts;
+  }
+  return { default: providerData };
+}
+
+export function setToken(provider, data, accountId = 'default') {
+  const all = loadTokens();
+  if (!all[provider] || !all[provider].accounts) {
+    all[provider] = { accounts: {}, currentAccount: accountId };
+  }
+  all[provider].accounts[accountId] = { ...(all[provider].accounts[accountId] || {}), ...data, saved_at: Date.now() };
+  all[provider].currentAccount = accountId;
   saveTokens(all);
 }
 
-export function clearToken(provider) {
+export function setTokenCurrentAccount(provider, accountId) {
   const all = loadTokens();
-  delete all[provider];
+  if (all[provider]?.accounts?.[accountId]) {
+    all[provider].currentAccount = accountId;
+    saveTokens(all);
+    return true;
+  }
+  return false;
+}
+
+export function getTokenCurrentAccount(provider) {
+  const all = loadTokens();
+  return all[provider]?.currentAccount || null;
+}
+
+export function clearToken(provider, accountId) {
+  const all = loadTokens();
+  if (!all[provider]) return;
+  if (accountId && all[provider].accounts) {
+    delete all[provider].accounts[accountId];
+    if (all[provider].currentAccount === accountId) {
+      const remaining = Object.keys(all[provider].accounts);
+      all[provider].currentAccount = remaining[0] || null;
+    }
+    if (Object.keys(all[provider].accounts).length === 0) {
+      delete all[provider];
+    }
+  } else {
+    delete all[provider];
+  }
   saveTokens(all);
 }
 

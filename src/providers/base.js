@@ -11,12 +11,15 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 export class BaseProvider {
   constructor(config = {}) {
     this.apiKey = config.apiKey || '';
+    this.apiKeys = config.apiKeys || [];
     this.model = config.model || '';
     this.baseUrl = config.baseUrl || '';
     this.fetchFn = config.fetchFn || globalThis.fetch;
     this.toolCallMode = config.toolCallMode || 'xml';
     this.retryDelayMs = config.retryDelayMs ?? DEFAULT_RETRY_DELAY_MS;
     this.retryAttempts = config.retryAttempts ?? DEFAULT_RETRY_ATTEMPTS;
+    this.currentKeyIndex = 0;
+    this.enableKeyRotation = this.apiKeys.length > 1 || (this.apiKey && this.apiKeys.length === 1);
   }
 
   supportsNativeToolCalling() {
@@ -37,50 +40,37 @@ export class BaseProvider {
     if (callbacks?.onThinking) callbacks.onThinking(chunk);
   }
 
-  /**
-   * Send messages and get a complete response.
-   * @param {Array<{role: string, content: string}>} messages
-   * @returns {Promise<string>} assistant message
-   */
-  async chat(messages) {
-    throw new Error('chat() not implemented');
-  }
-
-  /**
-   * Stream a response token-by-token.
-   * @param {Array<{role: string, content: string}>} messages
-   * @param {function(string): void} onChunk - called with each text chunk
-   * @returns {Promise<string>} full assembled response
-   */
-  async streamChat(messages, onChunk) {
-    // Default: fall back to non-streaming
-    const response = await this.chat(messages);
-    if (typeof response === 'string') {
-      this.emitContent(onChunk, response);
-    } else {
-      this.emitThinking(onChunk, response?.thinking || '');
-      this.emitContent(onChunk, response?.content || '');
+  getCurrentApiKey() {
+    if (this.enableKeyRotation && this.apiKeys.length > 0) {
+      return this.apiKeys[this.currentKeyIndex];
     }
-    return response;
+    return this.apiKey;
   }
 
-  /**
-   * Fetch with automatic retry on transient HTTP errors (502/503/504, etc.)
-   * and on network failures. Uses a fixed delay between attempts (default 2s).
-   * Streaming responses (response.body) are passed through as-is on success —
-   * a mid-stream disconnect will surface as a normal stream error, not a retry.
-   */
+  rotateApiKey() {
+    if (!this.enableKeyRotation || this.apiKeys.length <= 1) {
+      return false;
+    }
+    this.currentKeyIndex = (this.currentKeyIndex + 1) % this.apiKeys.length;
+    return true;
+  }
+
   async fetchWithRetry(url, options = {}, opts = {}) {
     const maxAttempts = Math.max(1, opts.attempts ?? this.retryAttempts);
     const delayMs = opts.delayMs ?? this.retryDelayMs;
-    const onRetry = opts.onRetry;  // (attempt, status, error) => void
+    const onRetry = opts.onRetry;
     let lastErr = null;
+
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       let res;
       try {
-        res = await this.fetchFn(url, options);
+        const currentKey = this.getCurrentApiKey();
+        const headers = { ...(options.headers || {}) };
+        if (currentKey && !headers.Authorization) {
+          headers.Authorization = `Bearer ${currentKey}`;
+        }
+        res = await this.fetchFn(url, { ...options, headers });
       } catch (e) {
-        // Network-level error: retriable.
         lastErr = e;
         if (attempt === maxAttempts) throw e;
         if (onRetry) onRetry(attempt, null, e);
@@ -89,11 +79,14 @@ export class BaseProvider {
       }
       if (res.ok) return res;
       const retriable = RETRYABLE_STATUSES.has(res.status);
-      // Drain the body so the socket can be reused.
       await res.text().catch(() => '');
       if (!retriable) {
-        // Non-retriable: surface immediately, do not loop.
         throw new Error(`API error ${res.status}`);
+      }
+      if (res.status === 429 && this.rotateApiKey()) {
+        if (onRetry) onRetry(attempt, res.status, new Error('Rate limited, rotating key'));
+        await sleep(delayMs);
+        continue;
       }
       if (attempt === maxAttempts) {
         throw new Error(`API error ${res.status} (after ${maxAttempts} attempts)`);
@@ -105,10 +98,6 @@ export class BaseProvider {
     throw lastErr || new Error('fetchWithRetry: exhausted attempts');
   }
 
-  /**
-   * Helper to make fetch requests with error handling. Retries on transient
-   * 5xx and 429/408 errors.
-   */
   async request(url, options) {
     const res = await this.fetchWithRetry(url, options);
     if (!res.ok) {

@@ -202,13 +202,35 @@ export async function runOnboarding() {
   const providerDef = PROVIDERS[provider];
   const config = { provider };
 
-  // 2. API Key (skip for Ollama)
+  // 2. API Key / OAuth (skip for Ollama)
   if (providerDef.needsKey) {
-    config.apiKey = await password({
-      message: `Enter your ${providerDef.name} API key:`,
-      mask: '*',
-      validate: (val) => val.length > 0 || 'API key is required',
-    });
+    const keys = [];
+    while (true) {
+      const key = await password({
+        message: `Enter ${providerDef.name} API key (${keys.length + 1}) or press Enter to finish:`,
+        mask: '*',
+        validate: (val) => val.length === 0 || val.length > 0,
+      });
+      if (!key) break;
+      keys.push(key);
+    }
+    if (keys.length > 0) {
+      config.apiKey = keys[0];
+      config.apiKeys = keys;
+    }
+  } else if (providerDef.auth === 'oauth' || providerDef.auth === 'oauth-device') {
+    const accounts = [];
+    while (true) {
+      const account = await input({
+        message: `Enter account identifier for ${providerDef.name} (${accounts.length + 1}) or press Enter to finish:`,
+        validate: (val) => val.length === 0 || val.length > 0,
+      });
+      if (!account) break;
+      accounts.push(account);
+    }
+    if (accounts.length > 0) {
+      config.accounts = accounts;
+    }
   }
 
   // 3. Base URL
@@ -308,7 +330,14 @@ export async function runOnboarding() {
   label('Provider', providerDef.name);
   label('Model', config.model);
   label('Base URL', config.baseUrl || providerDef.baseUrl);
-  label('API Key', config.apiKey ? '••••' + config.apiKey.slice(-4) : 'N/A');
+  if (config.apiKeys && config.apiKeys.length > 0) {
+    label('API Keys', `${config.apiKeys.length} key(s) (primary: ••••${config.apiKey.slice(-4)})`);
+  } else {
+    label('API Key', config.apiKey ? '••••' + config.apiKey.slice(-4) : 'N/A');
+  }
+  if (config.accounts && config.accounts.length > 0) {
+    label('OAuth Accounts', config.accounts.join(', '));
+  }
   label('Proxy', config.proxy || 'None');
   label('Commands Trust', config.trust.commands);
   label('Files Trust', config.trust.files);

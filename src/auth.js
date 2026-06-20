@@ -15,8 +15,20 @@ import { platform } from 'node:os';
  * Auth file shape:
  * {
  *   "providers": {
- *     "codex": { "access_token": "...", "refresh_token": "...", "expires_at": 1234, ... },
- *     "copilot": { "token": "ghp_..." }
+ *     "codex": {
+ *       "accounts": {
+ *         "account1": { "access_token": "...", "refresh_token": "...", "expires_at": 1234, ... },
+ *         "account2": { ... }
+ *       },
+ *       "currentAccount": "account1"
+ *     },
+ *     "copilot": {
+ *       "accounts": {
+ *         "account1": { "ghAccessToken": "...", "scope": "copilot" },
+ *         "account2": { ... }
+ *       },
+ *       "currentAccount": "account1"
+ *     }
  *   }
  * }
  */
@@ -39,20 +51,67 @@ export function saveAuth(data) {
 
 export function getProviderAuth(providerId) {
   const a = loadAuth();
-  return a.providers?.[providerId] || null;
+  const provider = a.providers?.[providerId];
+  if (!provider) return null;
+  if (provider.accounts) {
+    const current = provider.currentAccount || Object.keys(provider.accounts)[0];
+    return provider.accounts[current] || null;
+  }
+  return provider;
 }
 
-export function setProviderAuth(providerId, tokens) {
+export function getProviderAccounts(providerId) {
+  const a = loadAuth();
+  const provider = a.providers?.[providerId];
+  if (!provider) return {};
+  if (provider.accounts) {
+    return provider.accounts;
+  }
+  return { default: provider };
+}
+
+export function setProviderAuth(providerId, tokens, accountId = 'default') {
   const a = loadAuth();
   a.providers = a.providers || {};
-  a.providers[providerId] = tokens;
+  if (!a.providers[providerId] || !a.providers[providerId].accounts) {
+    a.providers[providerId] = { accounts: {}, currentAccount: accountId };
+  }
+  a.providers[providerId].accounts[accountId] = tokens;
+  a.providers[providerId].currentAccount = accountId;
   saveAuth(a);
 }
 
-export function clearProviderAuth(providerId) {
+export function setProviderCurrentAccount(providerId, accountId) {
   const a = loadAuth();
-  if (a.providers) delete a.providers[providerId];
+  if (a.providers?.[providerId]?.accounts?.[accountId]) {
+    a.providers[providerId].currentAccount = accountId;
+    saveAuth(a);
+    return true;
+  }
+  return false;
+}
+
+export function clearProviderAuth(providerId, accountId) {
+  const a = loadAuth();
+  if (!a.providers?.[providerId]) return;
+  if (accountId && a.providers[providerId].accounts) {
+    delete a.providers[providerId].accounts[accountId];
+    if (a.providers[providerId].currentAccount === accountId) {
+      const remaining = Object.keys(a.providers[providerId].accounts);
+      a.providers[providerId].currentAccount = remaining[0] || null;
+    }
+    if (Object.keys(a.providers[providerId].accounts).length === 0) {
+      delete a.providers[providerId];
+    }
+  } else {
+    delete a.providers[providerId];
+  }
   saveAuth(a);
+}
+
+export function getProviderCurrentAccount(providerId) {
+  const a = loadAuth();
+  return a.providers?.[providerId]?.currentAccount || null;
 }
 
 // --- PKCE helpers ---

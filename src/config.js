@@ -69,6 +69,9 @@ export const DEFAULT_CONFIG = {
 
   notesFile: null,
   envDenyKeys: ['TOKEN', 'KEY', 'SECRET', 'PASSWORD', 'CREDENTIAL'],
+
+  apiKeys: [],
+  accounts: [],
 };
 
 export function getConfigDir() { return CONFIG_DIR; }
