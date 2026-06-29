@@ -1,4 +1,5 @@
 import chalk from 'chalk';
+import { APP_VERSION } from '../version.js';
 
 const BANNER = `
   ██████╗██████╗ ███████╗███████╗ ██████╗ ██████╗ ██████╗ ███████╗
@@ -11,7 +12,7 @@ const BANNER = `
 
 export function banner() {
   console.log(chalk.cyan(BANNER));
-  console.log(chalk.gray('  CLI Coding Assistant — v1.0.0\n'));
+  console.log(chalk.gray(`  CLI Coding Assistant — v${APP_VERSION}\n`));
 }
 
 export function info(msg) {
