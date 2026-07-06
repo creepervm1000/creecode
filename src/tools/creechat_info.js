@@ -3,6 +3,8 @@
  * These are only useful when running inside the CreeChat integration.
  */
 
+import { safeJsonParse } from '../utils/safe_json.js';
+
 function apiUrl(baseUrl, path) {
   return `${String(baseUrl).replace(/\/+$/, '')}${path}`;
 }
@@ -23,7 +25,7 @@ async function creechatRequest(baseUrl, token, method, path, body) {
     const resp = await fetch(apiUrl(baseUrl, path), init);
     const text = await resp.text();
     let data = null;
-    try { data = text ? JSON.parse(text) : null; } catch {}
+    try { data = text ? safeJsonParse(text) : null; } catch {}
     if (!resp.ok) {
       return { error: `creechat api error ${resp.status}: ${data?.error || data?.message || text || 'request failed'}` };
     }

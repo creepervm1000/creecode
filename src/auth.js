@@ -5,6 +5,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { createServer } from 'node:http';
 import { spawn } from 'node:child_process';
 import { platform } from 'node:os';
+import { safeJsonParse } from './utils/safe_json.js';
 
 /**
  * Auth helper: stores per-provider OAuth / API tokens at
@@ -40,7 +41,7 @@ function ensureDir() { mkdirSync(AUTH_DIR, { recursive: true }); }
 
 export function loadAuth() {
   if (!existsSync(AUTH_FILE)) return { providers: {} };
-  try { return JSON.parse(readFileSync(AUTH_FILE, 'utf-8')); }
+  try { return safeJsonParse(readFileSync(AUTH_FILE, 'utf-8')); }
   catch { return { providers: {} }; }
 }
 

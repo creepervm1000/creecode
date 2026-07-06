@@ -2,6 +2,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { checkTrust } from '../trust.js';
+import { safeJsonParse } from '../utils/safe_json.js';
 
 /**
  * Global memory store. Unlike notes (workspace-scoped) and todos (workspace-
@@ -31,7 +32,7 @@ function load(config) {
   const p = memoryPath(config);
   if (!existsSync(p)) return empty();
   try {
-    const raw = JSON.parse(readFileSync(p, 'utf-8'));
+    const raw = safeJsonParse(readFileSync(p, 'utf-8'));
     if (!raw || !Array.isArray(raw.entries)) return empty();
     return { version: raw.version || 1, entries: raw.entries };
   } catch {

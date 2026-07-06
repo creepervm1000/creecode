@@ -1,4 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto';
+import { safeJsonParse } from '../utils/safe_json.js';
 
 /**
  * Text / encoding / hashing utilities. All operate on strings in memory —
@@ -80,7 +81,7 @@ export async function jsonFormat(args) {
   const input = args.input == null ? '' : String(args.input);
   const indent = args.indent == null ? 2 : args.indent;
   try {
-    const parsed = JSON.parse(input);
+    const parsed = safeJsonParse(input);
     return { output: JSON.stringify(parsed, null, indent), valid: true };
   } catch (e) { return { error: `Invalid JSON: ${e.message}`, valid: false }; }
 }
@@ -88,7 +89,7 @@ export async function jsonFormat(args) {
 export async function jsonValidate(args) {
   const input = args.input == null ? '' : String(args.input);
   try {
-    const parsed = JSON.parse(input);
+    const parsed = safeJsonParse(input);
     return {
       valid: true,
       type: Array.isArray(parsed) ? 'array' : typeof parsed,
@@ -138,10 +139,10 @@ export async function jwtDecode(args) {
   if (parts.length !== 3) return { error: 'Not a 3-part JWT (header.payload.signature)' };
   let header, payload, sigRaw;
   try {
-    header = JSON.parse(b64urlToBuf(parts[0]).toString('utf-8'));
+    header = safeJsonParse(b64urlToBuf(parts[0]).toString('utf-8'));
   } catch (e) { return { error: `Bad header: ${e.message}` }; }
   try {
-    payload = JSON.parse(b64urlToBuf(parts[1]).toString('utf-8'));
+    payload = safeJsonParse(b64urlToBuf(parts[1]).toString('utf-8'));
   } catch (e) { return { error: `Bad payload: ${e.message}` }; }
   try { sigRaw = b64urlToBuf(parts[2]).toString('hex'); } catch (e) { sigRaw = null; }
   // Surface standard claims with normalized types.

@@ -1,3 +1,4 @@
+import { safeJsonParse } from '../utils/safe_json.js';
 import { readFile, writeFile, editFile, listDirectory, readFileLines, fileHash, diffFiles, findReplace } from './files.js';
 import { runCommand } from './commands.js';
 import { grepText, globFiles, fileStat } from './search.js';
@@ -330,14 +331,14 @@ export function parseToolCalls(response) {
   const toolCalls = [];
   let match;
   while ((match = toolCallRegex.exec(response)) !== null) {
-    try { toolCalls.push(JSON.parse(match[1])); } catch { /* skip */ }
+    try { toolCalls.push(safeJsonParse(match[1])); } catch { /* skip */ }
   }
   let trailingToolCallText = null;
   if (toolCalls.length === 0) {
     const trailingMatch = response.match(trailingToolCallRegex);
     if (trailingMatch) {
       try {
-        const parsed = JSON.parse(trailingMatch[1]);
+        const parsed = safeJsonParse(trailingMatch[1]);
         toolCalls.push(parsed);
         trailingToolCallText = trailingMatch[0];
       } catch {

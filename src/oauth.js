@@ -1,6 +1,7 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
+import { safeJsonParse } from './utils/safe_json.js';
 
 /**
  * OAuth token store and device-code flow helper.
@@ -27,7 +28,7 @@ const STORE_PATH = join(homedir(), '.creecode', 'oauth.json');
 
 export function loadTokens() {
   if (!existsSync(STORE_PATH)) return {};
-  try { return JSON.parse(readFileSync(STORE_PATH, 'utf-8')) || {}; } catch { return {}; }
+  try { return safeJsonParse(readFileSync(STORE_PATH, 'utf-8')) || {}; } catch { return {}; }
 }
 
 export function saveTokens(tokens) {
