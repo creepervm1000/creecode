@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { dirname, relative, join } from 'node:path';
 import { checkTrust } from '../trust.js';
 import { resolveWorkspacePath, getWorkspaceRoot } from '../workspace.js';
+import { isRegexSafe } from '../utils/regex.js';
 
 /**
  * File tools for the coding agent.
@@ -258,9 +259,10 @@ export async function findReplace(args, trustLevel, policy = {}) {
   const allowed = await checkTrust('files', trustLevel, `Regex replace /${pattern}/ in ${base.resolvedPath}`, false);
   if (!allowed) return { error: 'Permission denied' };
   const flags = (args.flags || 'g').replace(/[^gimsuyd]/g, '');
-  let re;
-  try { re = new RegExp(pattern, flags.includes('g') ? flags : flags + 'g'); }
-  catch (e) { return { error: `Invalid regex: ${e.message}` }; }
+  const finalFlags = flags.includes('g') ? flags : flags + 'g';
+  const checked = isRegexSafe(pattern, finalFlags);
+  if (!checked.safe) return { error: checked.reason };
+  const re = checked.re;
   const reFilter = args.file_glob ? globToRegex(args.file_glob) : null;
   const root = getWorkspaceRoot();
   const changed = [];

@@ -2,6 +2,7 @@ import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { checkTrust } from '../trust.js';
 import { resolveWorkspacePath, getWorkspaceRoot } from '../workspace.js';
+import { isRegexSafe } from '../utils/regex.js';
 
 const DEFAULT_IGNORE = new Set(['.git', 'node_modules', 'dist', 'build', '.next', '.cache', '.venv', '__pycache__']);
 
@@ -38,8 +39,9 @@ export async function grepText(args, trustLevel, policy = {}) {
   const pattern = args.pattern;
   if (!pattern) return { error: 'pattern is required' };
   const flags = args.ignore_case ? 'i' : '';
-  let re;
-  try { re = new RegExp(pattern, flags); } catch (e) { return { error: `Invalid regex: ${e.message}` }; }
+  const checked = isRegexSafe(pattern, flags);
+  if (!checked.safe) return { error: checked.reason };
+  const re = checked.re;
   const maxMatches = args.max_matches || 200;
   const fileGlob = args.file_glob ? globToRegex(args.file_glob) : null;
   const root = getWorkspaceRoot();

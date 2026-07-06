@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { safeJsonParse } from '../utils/safe_json.js';
+import { isRegexSafe, isInputSafe } from '../utils/regex.js';
 
 /**
  * Text / encoding / hashing utilities. All operate on strings in memory —
@@ -168,8 +169,10 @@ export async function regexTest(args) {
   const text = args.input == null ? '' : String(args.input);
   if (!pattern) return { error: 'pattern is required' };
   const flags = (args.flags || '').replace(/[^gimsuyd]/g, '');
-  let re;
-  try { re = new RegExp(pattern, flags); } catch (e) { return { error: `Invalid regex: ${e.message}` }; }
+  if (!isInputSafe(text)) return { error: `Input too long (${text.length} chars)` };
+  const checked = isRegexSafe(pattern, flags);
+  if (!checked.safe) return { error: checked.reason };
+  const re = checked.re;
   if (flags.includes('g')) {
     const matches = [];
     let m;
