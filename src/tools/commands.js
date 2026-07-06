@@ -32,12 +32,27 @@ function isSafeCommand(command) {
   });
 }
 
+const MAX_COMMAND_LENGTH = 10000;
+const BLOCKED_SEQUENCES = [
+  '\n', '\r',    // newline injection
+  '\x00',        // null byte injection
+];
+
 export async function runCommand(args, trustLevel, policy = {}) {
   const command = args.command;
+  if (!command || typeof command !== 'string') return { error: 'command is required and must be a string' };
+  if (command.length > MAX_COMMAND_LENGTH) {
+    return { error: `Command too long (${command.length} chars, max ${MAX_COMMAND_LENGTH})` };
+  }
+  for (const seq of BLOCKED_SEQUENCES) {
+    if (command.includes(seq)) {
+      return { error: 'Command contains blocked control characters' };
+    }
+  }
   const cwdResult = resolveWorkspacePath(args.cwd || '.', policy);
   if (cwdResult.error) return { error: cwdResult.error };
   const cwd = cwdResult.resolvedPath;
-  const timeout = args.timeout || 30000; // 30s default
+  const timeout = args.timeout || policy.commandTimeoutMs || 30000;
   const workspaceRoot = getWorkspaceRoot();
 
   // Hard safety block: refuse destructive commands that target system paths
