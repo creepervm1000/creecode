@@ -1,6 +1,7 @@
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, chmodSync } from 'node:fs';
 import { join } from 'node:path';
-import { homedir } from 'node:os';
+import { homedir, platform } from 'node:os';
+import { safeJsonParse } from './utils/safe_json.js';
 
 /**
  * OAuth token store and device-code flow helper.
@@ -27,12 +28,14 @@ const STORE_PATH = join(homedir(), '.creecode', 'oauth.json');
 
 export function loadTokens() {
   if (!existsSync(STORE_PATH)) return {};
-  try { return JSON.parse(readFileSync(STORE_PATH, 'utf-8')) || {}; } catch { return {}; }
+  try { return safeJsonParse(readFileSync(STORE_PATH, 'utf-8')) || {}; } catch { return {}; }
 }
 
 export function saveTokens(tokens) {
   mkdirSync(join(homedir(), '.creecode'), { recursive: true });
+  if (platform() !== 'win32') chmodSync(join(homedir(), '.creecode'), 0o700);
   writeFileSync(STORE_PATH, JSON.stringify(tokens, null, 2), 'utf-8');
+  if (platform() !== 'win32') chmodSync(STORE_PATH, 0o600);
 }
 
 export function getToken(provider) {

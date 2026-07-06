@@ -1,6 +1,7 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { getWorkspaceRoot } from '../workspace.js';
+import { safeJsonParse } from './safe_json.js';
 import chalk from 'chalk';
 
 // ── layout config ──────────────────────────────────────────────
@@ -17,7 +18,7 @@ function todoPath(config) {
 function loadTodos(config) {
   const p = todoPath(config);
   if (!existsSync(p)) return [];
-  try { return JSON.parse(readFileSync(p, 'utf-8')); } catch { return []; }
+  try { return safeJsonParse(readFileSync(p, 'utf-8')); } catch { return []; }
 }
 
 function tw() { return process.stdout.columns || 80; }

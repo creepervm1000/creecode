@@ -2,6 +2,8 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { checkTrust } from '../trust.js';
+import { safeJsonParse } from '../utils/safe_json.js';
+import { isRegexSafe } from '../utils/regex.js';
 
 /**
  * Global memory store. Unlike notes (workspace-scoped) and todos (workspace-
@@ -31,7 +33,7 @@ function load(config) {
   const p = memoryPath(config);
   if (!existsSync(p)) return empty();
   try {
-    const raw = JSON.parse(readFileSync(p, 'utf-8'));
+    const raw = safeJsonParse(readFileSync(p, 'utf-8'));
     if (!raw || !Array.isArray(raw.entries)) return empty();
     return { version: raw.version || 1, entries: raw.entries };
   } catch {
@@ -63,8 +65,9 @@ export async function memoryList(args, trustLevel, config = {}) {
   let entries = data.entries;
   if (args.tag) entries = entries.filter(e => e.tag === args.tag);
   if (args.search) {
-    const re = new RegExp(args.search, args.case_insensitive ? 'i' : '');
-    entries = entries.filter(e => re.test(e.text) || (e.tag && re.test(e.tag)));
+    const checked = isRegexSafe(args.search, args.case_insensitive ? 'i' : '');
+    if (!checked.safe) return { error: checked.reason };
+    entries = entries.filter(e => checked.re.test(e.text) || (e.tag && checked.re.test(e.tag)));
   }
   return {
     path: memoryPath(config),
@@ -179,9 +182,10 @@ export async function memorySearch(args, trustLevel, config = {}) {
   if (!await gate(trustLevel, 'Search memory')) return { error: 'Permission denied' };
   const pattern = args.pattern;
   if (!pattern) return { error: 'pattern is required' };
-  let re;
-  try { re = new RegExp(pattern, args.case_insensitive ? 'gi' : 'g'); }
-  catch (e) { return { error: `Invalid regex: ${e.message}` }; }
+  const flags = args.case_insensitive ? 'gi' : 'g';
+  const checked = isRegexSafe(pattern, flags);
+  if (!checked.safe) return { error: checked.reason };
+  const re = checked.re;
   const matches = [];
   for (const e of load(config).entries) {
     const m = e.text.match(re);

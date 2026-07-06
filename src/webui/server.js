@@ -1,8 +1,46 @@
 import express from 'express';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { randomBytes } from 'node:crypto';
 import { success, info } from '../utils/logger.js';
 import { buildToolsPrompt, buildToolModeSystemPrompt, parseToolCalls, executeTool } from '../tools/index.js';
+
+const RATE_LIMIT_WINDOW = 60000;
+const RATE_LIMIT_MAX = 30;
+const rateLimitStore = new Map();
+
+function rateLimit(ip) {
+  const now = Date.now();
+  const entry = rateLimitStore.get(ip) || { count: 0, reset: now + RATE_LIMIT_WINDOW };
+  if (now > entry.reset) { entry.count = 0; entry.reset = now + RATE_LIMIT_WINDOW; }
+  entry.count++;
+  rateLimitStore.set(ip, entry);
+  return entry.count > RATE_LIMIT_MAX;
+}
+
+function sanitizeJson(input) {
+  if (input && typeof input === 'object' && !Array.isArray(input)) {
+    const proto = Object.getPrototypeOf(input);
+    if (proto !== Object.prototype && proto !== null) {
+      return Object.assign({}, input);
+    }
+  }
+  return input;
+}
+
+function authMiddleware(config) {
+  const token = config.webuiAuthToken;
+  if (!token) return (req, res, next) => next();
+  return (req, res, next) => {
+    const provided = req.headers['authorization']?.replace(/^Bearer\s+/i, '') ||
+                     req.headers['x-auth-token'] ||
+                     req.query?.token;
+    if (!provided || provided !== token) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+    next();
+  };
+}
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -76,17 +114,44 @@ function stripToolCallXml(text) {
 export async function startWebUI(provider, config, port = 3000) {
   return new Promise((resolve, reject) => {
     const app = express();
-    app.use(express.json({ limit: '2mb' }));
+
+    const csrfToken = randomBytes(32).toString('hex');
+
+    app.use((req, res, next) => {
+      res.setHeader('Content-Security-Policy', "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; form-action 'self'");
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      res.setHeader('X-Frame-Options', 'DENY');
+      res.setHeader('Referrer-Policy', 'same-origin');
+      res.setHeader('X-XSS-Protection', '0');
+      res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+      next();
+    });
+
+    app.use(express.json({ limit: '1mb' }));
     app.use(express.static(join(__dirname, 'public')));
+    app.use(authMiddleware(config));
 
     const trustConfig = config.trust || { commands: 'prompt-trust', files: 'prompt-trust' };
     const systemPrompt = buildSystemPrompt(config, trustConfig);
 
     let messages = [{ role: 'system', content: systemPrompt }];
 
+    app.get('/api/csrf', (req, res) => {
+      res.json({ token: csrfToken });
+    });
+
     app.post('/api/chat', async (req, res) => {
-      const { message } = req.body;
+      const clientIp = req.ip || req.socket.remoteAddress || 'unknown';
+      if (rateLimit(clientIp)) {
+        return res.status(429).json({ error: 'Too many requests' });
+      }
+
+      const body = sanitizeJson(req.body);
+      const { message } = body;
       if (!message) return res.status(400).json({ error: 'Message is required' });
+      if (typeof message !== 'string' || message.length > 100000) {
+        return res.status(400).json({ error: 'Message too long or invalid' });
+      }
 
       const baselineLen = messages.length;
       messages.push({ role: 'user', content: message });
@@ -95,7 +160,10 @@ export async function startWebUI(provider, config, port = 3000) {
       res.setHeader('Cache-Control', 'no-cache');
       res.setHeader('Connection', 'keep-alive');
 
-      const send = (evt) => res.write(`data: ${JSON.stringify(evt)}\n\n`);
+      const send = (evt) => {
+        if (res.destroyed) return;
+        try { res.write(`data: ${JSON.stringify(evt)}\n\n`); } catch {}
+      };
 
       try {
         let iteration = 0;
@@ -207,11 +275,15 @@ export async function startWebUI(provider, config, port = 3000) {
     });
 
     app.post('/api/clear', (req, res) => {
+      const clientIp = req.ip || req.socket.remoteAddress || 'unknown';
+      if (rateLimit(clientIp)) return res.status(429).json({ error: 'Too many requests' });
       messages = [{ role: 'system', content: systemPrompt }];
       res.json({ ok: true });
     });
 
     app.get('/api/config', (req, res) => {
+      const clientIp = req.ip || req.socket.remoteAddress || 'unknown';
+      if (rateLimit(clientIp)) return res.status(429).json({ error: 'Too many requests' });
       res.json({ provider: config.provider, model: config.model, toolCallMode: config.toolCallMode || 'xml', toolsEnabled: true });
     });
 

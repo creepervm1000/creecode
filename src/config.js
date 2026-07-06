@@ -1,6 +1,7 @@
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, chmodSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { homedir } from 'node:os';
+import { homedir, platform } from 'node:os';
+import { safeJsonParse } from './utils/safe_json.js';
 
 const CONFIG_DIR = join(homedir(), '.creecode');
 const CONFIG_PATH = join(CONFIG_DIR, 'config.json');
@@ -82,19 +83,22 @@ export function loadConfig() {
   if (!configExists()) return { ...DEFAULT_CONFIG };
   try {
     const raw = readFileSync(CONFIG_PATH, 'utf-8');
-    const parsed = JSON.parse(raw);
+    const parsed = safeJsonParse(raw);
     return { ...DEFAULT_CONFIG, ...parsed, trust: { ...DEFAULT_CONFIG.trust, ...(parsed.trust || {}) } };
   } catch { return { ...DEFAULT_CONFIG }; }
 }
 
 export function saveConfig(data) {
   mkdirSync(CONFIG_DIR, { recursive: true });
+  if (platform() !== 'win32') chmodSync(CONFIG_DIR, 0o700);
   writeFileSync(CONFIG_PATH, JSON.stringify(data, null, 2), 'utf-8');
+  if (platform() !== 'win32') chmodSync(CONFIG_PATH, 0o600);
 }
 
 export function mergeConfig(saved, cli) {
   const merged = { ...saved };
   for (const [key, value] of Object.entries(cli)) {
+    if (key === '__proto__' || key === 'constructor') continue;
     if (value !== undefined && value !== null) merged[key] = value;
   }
   return merged;
@@ -104,9 +108,17 @@ export function setConfigValue(config, keyPath, value) {
   const parts = keyPath.split('.');
   let cur = config;
   for (let i = 0; i < parts.length - 1; i++) {
-    if (cur[parts[i]] == null || typeof cur[parts[i]] !== 'object') cur[parts[i]] = {};
-    cur = cur[parts[i]];
+    const key = parts[i];
+    if (key === '__proto__' || key === 'constructor' || key === 'prototype') {
+      throw new Error(`Invalid config key path: ${key}`);
+    }
+    if (cur[key] == null || typeof cur[key] !== 'object') cur[key] = {};
+    cur = cur[key];
   }
-  cur[parts[parts.length - 1]] = value;
+  const lastKey = parts[parts.length - 1];
+  if (lastKey === '__proto__' || lastKey === 'constructor' || lastKey === 'prototype') {
+    throw new Error(`Invalid config key: ${lastKey}`);
+  }
+  cur[lastKey] = value;
   return config;
 }

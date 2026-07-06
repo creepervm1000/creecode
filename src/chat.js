@@ -18,6 +18,7 @@ import { showSidebar, clearSidebar, canShowSidebar, loadTodos, MIN_WIDTH } from 
 import { subagentManager } from './subagent.js';
 import { discoverSkills, initSkillDir, clearRuntimeTools, registerRuntimeTool } from './tools/index.js';
 import { normalizeAssistantResponse } from './utils/normalize.js';
+import { safeJsonParse } from './utils/safe_json.js';
 // Ensure keypress events fire on stdin (no-op on newer node, harmless elsewhere).
 readline.emitKeypressEvents(process.stdin);
 
@@ -99,7 +100,7 @@ function loadHistory() {
   try {
     if (existsSync(HISTORY_FILE)) {
       const data = readFileSync(HISTORY_FILE, 'utf-8');
-      const parsed = JSON.parse(data);
+      const parsed = safeJsonParse(data);
       if (Array.isArray(parsed)) {
         // Defensive: history files written by older versions may contain
         // orphan tool results at the start (no preceding assistant with

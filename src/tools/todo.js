@@ -1,6 +1,7 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { getWorkspaceRoot } from '../workspace.js';
+import { safeJsonParse } from '../utils/safe_json.js';
 
 function todoPath(config) {
   return config.todoFile ? config.todoFile : join(getWorkspaceRoot(), '.creecode', 'todo.json');
@@ -8,7 +9,7 @@ function todoPath(config) {
 function load(config) {
   const p = todoPath(config);
   if (!existsSync(p)) return [];
-  try { return JSON.parse(readFileSync(p, 'utf-8')); } catch { return []; }
+  try { return safeJsonParse(readFileSync(p, 'utf-8')); } catch { return []; }
 }
 function save(config, todos) {
   const p = todoPath(config);
