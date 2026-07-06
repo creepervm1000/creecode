@@ -1,6 +1,6 @@
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, chmodSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { homedir } from 'node:os';
+import { homedir, platform } from 'node:os';
 import { safeJsonParse } from './utils/safe_json.js';
 
 const CONFIG_DIR = join(homedir(), '.creecode');
@@ -90,7 +90,9 @@ export function loadConfig() {
 
 export function saveConfig(data) {
   mkdirSync(CONFIG_DIR, { recursive: true });
+  if (platform() !== 'win32') chmodSync(CONFIG_DIR, 0o700);
   writeFileSync(CONFIG_PATH, JSON.stringify(data, null, 2), 'utf-8');
+  if (platform() !== 'win32') chmodSync(CONFIG_PATH, 0o600);
 }
 
 export function mergeConfig(saved, cli) {

@@ -1,6 +1,6 @@
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, chmodSync } from 'node:fs';
 import { join } from 'node:path';
-import { homedir } from 'node:os';
+import { homedir, platform } from 'node:os';
 import { safeJsonParse } from './utils/safe_json.js';
 
 /**
@@ -33,7 +33,9 @@ export function loadTokens() {
 
 export function saveTokens(tokens) {
   mkdirSync(join(homedir(), '.creecode'), { recursive: true });
+  if (platform() !== 'win32') chmodSync(join(homedir(), '.creecode'), 0o700);
   writeFileSync(STORE_PATH, JSON.stringify(tokens, null, 2), 'utf-8');
+  if (platform() !== 'win32') chmodSync(STORE_PATH, 0o600);
 }
 
 export function getToken(provider) {

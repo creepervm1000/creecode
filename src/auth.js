@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, chmodSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { createHash, randomBytes } from 'node:crypto';
@@ -37,7 +37,13 @@ import { safeJsonParse } from './utils/safe_json.js';
 const AUTH_DIR = join(homedir(), '.creecode');
 const AUTH_FILE = join(AUTH_DIR, 'auth.json');
 
-function ensureDir() { mkdirSync(AUTH_DIR, { recursive: true }); }
+function secureDir() {
+  mkdirSync(AUTH_DIR, { recursive: true });
+  if (platform() !== 'win32') chmodSync(AUTH_DIR, 0o700);
+}
+function secureFile(p) {
+  if (platform() !== 'win32') try { chmodSync(p, 0o600); } catch {}
+}
 
 export function loadAuth() {
   if (!existsSync(AUTH_FILE)) return { providers: {} };
@@ -46,8 +52,9 @@ export function loadAuth() {
 }
 
 export function saveAuth(data) {
-  ensureDir();
+  secureDir();
   writeFileSync(AUTH_FILE, JSON.stringify(data, null, 2), 'utf-8');
+  secureFile(AUTH_FILE);
 }
 
 export function getProviderAuth(providerId) {
