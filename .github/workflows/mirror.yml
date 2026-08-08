@@ -1,0 +1,67 @@
+```yaml
+name: mirror-creecode
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout GitHub repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Save GitHub workflows
+        run: |
+          cp -a .github /tmp/github-workflows
+
+      - name: Clone source repo
+        run: |
+          git clone https://git.creepernet.bond/creeper/creecode source
+
+      - name: Replace repository with source
+        run: |
+          rm -rf .git
+
+          cp -a source/. .
+
+          rm -rf source
+          rm -rf .github
+
+          mv /tmp/github-workflows .github
+
+      - name: Restore source Git history
+        run: |
+          git init
+
+          git remote add source https://git.creepernet.bond/creeper/creecode
+
+          git fetch source
+
+          git checkout -B main source/main
+
+      - name: Add GitHub workflow
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add .github
+
+          git commit -m "Add GitHub Actions workflow" || true
+
+      - name: Configure GitHub remote
+        run: |
+          git remote remove source || true
+          git remote add origin \
+            "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git"
+
+      - name: Push mirror
+        run: |
+          git push --force origin main
+```
