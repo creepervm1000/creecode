@@ -1,4 +1,3 @@
-```yaml
 name: mirror-creecode
 
 on:
@@ -64,4 +63,3 @@ jobs:
       - name: Push mirror
         run: |
           git push --force origin main
-```
